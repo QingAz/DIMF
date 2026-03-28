@@ -1,0 +1,12 @@
+.idea/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+artifacts/
+outputs/
+logs/
+.pyuser/
+
+.DS_Store

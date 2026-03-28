@@ -1,0 +1,59 @@
+seed: 42
+seeds: [42, 134, 456, 321, 712]
+
+data:
+  csv_path: data/LiquidSugar.csv
+  time_col: TimeStamp
+  target_col: yield_flow
+
+  # feature groups (prefix matching)
+  feed_prefix: feed_
+  stage1_prefix: stage1_
+  stage2_prefix: stage2_
+  stage3_prefix: stage3_
+
+  # chronological split ratios
+  train_ratio: 0.7
+  val_ratio: 0.1
+  test_ratio: 0.2
+
+  # windowing
+  L: 96            # history length (steps)
+  H: 4             # horizon (steps) -- can be overridden by CLI
+  L_max: 48        # max lag candidates (<= L-1)
+
+  # missing handling
+  fillna: ffill    # ffill / bfill / zero
+  use_delta_t: true
+
+model:
+  encoder: transformer   # gru / lstm / transformer
+  hidden_dim: 64
+  num_layers: 3
+  dropout: 0.0
+
+  # delay alignment
+  attn_dim: 64
+  lag_emb: true
+
+  # transformer only
+  transformer_nhead: 4
+  transformer_ff_dim: 256
+
+train:
+  epochs: 200
+  batch_size: 256
+  lr: 0.0005
+  weight_decay: 0.0001
+  grad_clip: 1.0
+  early_stop_patience: 50
+
+  # regularization weights
+  lambda_ent: 0.005
+  lambda_tv: 0.01
+
+logging:
+  output_dir: outputs
+  log_path: outputs/train_log.jsonl
+  ckpt_path: artifacts/best.ckpt
+  scaler_path: artifacts/scaler.pkl
