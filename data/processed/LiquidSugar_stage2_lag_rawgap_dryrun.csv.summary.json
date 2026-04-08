@@ -1,0 +1,26 @@
+{
+  "input_path": "/projects/p32954/liquidsugar_lag_framework/outputs_stdlib/liquidsugar_scheme_b_stage2_lag_preview/raw/liquidsugar_stage2_lagged.csv",
+  "output_path": "/projects/p32954/dimf_liquid_sugar_repo-490/data/processed/LiquidSugar_stage2_lag_rawgap_dryrun.csv",
+  "rows_input": 22854,
+  "rows_output": 22638,
+  "rows_dropped_as_interpolated": 216,
+  "time_min": "2021-04-30 00:15",
+  "time_max": "2022-04-29 23:45",
+  "split_row_count": {
+    "train": 15807,
+    "val": 2283,
+    "test": 4548
+  },
+  "lag_value_count_all_rows": {
+    "0": 22160,
+    "2": 160,
+    "4": 158,
+    "6": 160
+  },
+  "lag_value_count_test_rows": {
+    "0": 4358,
+    "2": 64,
+    "4": 62,
+    "6": 64
+  }
+}

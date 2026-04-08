@@ -1,0 +1,21 @@
+input_path=/gpfs/projects/p32954/dimf_liquid_sugar_repo-490/data/LiquidSugar.csv
+output_path=/gpfs/projects/p32954/dimf_liquid_sugar_repo-490/data/processed/LiquidSugar_linear_interpolated.csv
+time_col=TimeStamp
+interval_minutes=15
+original_rows=22638
+regularized_rows=35039
+inserted_interpolated_rows=12401
+non_15min_intervals=223
+max_gap_minutes=21405
+
+largest_gaps:
+- 2021-11-22 12:15 -> 2021-12-07 9:00: gap_minutes=21405, missing_slots=1426
+- 2022-03-04 23:45 -> 2022-03-18 9:00: gap_minutes=19275, missing_slots=1284
+- 2021-06-14 23:45 -> 2021-06-21 9:00: gap_minutes=9195, missing_slots=612
+- 2021-05-21 23:45 -> 2021-05-24 9:00: gap_minutes=3435, missing_slots=228
+- 2021-05-28 23:45 -> 2021-05-31 9:00: gap_minutes=3435, missing_slots=228
+- 2021-06-04 23:45 -> 2021-06-07 9:00: gap_minutes=3435, missing_slots=228
+- 2021-06-11 23:45 -> 2021-06-14 9:00: gap_minutes=3435, missing_slots=228
+- 2021-06-25 23:45 -> 2021-06-28 9:00: gap_minutes=3435, missing_slots=228
+- 2021-07-02 23:45 -> 2021-07-05 9:00: gap_minutes=3435, missing_slots=228
+- 2021-07-09 23:45 -> 2021-07-12 9:00: gap_minutes=3435, missing_slots=228

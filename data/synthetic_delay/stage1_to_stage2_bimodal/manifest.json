@@ -1,0 +1,31 @@
+{
+  "input_path": "/gpfs/projects/p32954/dimf_liquid_sugar_repo-490/data/processed/LiquidSugar_linear_interpolated.csv",
+  "dataset_path": "/projects/p32954/dimf_liquid_sugar_repo-490/data/synthetic_delay/stage1_to_stage2_bimodal/LiquidSugar_stage1_to_stage2_bimodal.csv",
+  "truth_path": "/projects/p32954/dimf_liquid_sugar_repo-490/data/synthetic_delay/stage1_to_stage2_bimodal/delay_truth.csv",
+  "edge": "stage1_to_stage2",
+  "mode": "bimodal",
+  "source_cols": [
+    "stage1_var1",
+    "stage1_var2"
+  ],
+  "target_cols": [
+    "stage2_var1",
+    "stage2_var2",
+    "stage2_var3",
+    "stage2_var4",
+    "stage2_var5",
+    "stage2_var6",
+    "stage2_var7",
+    "stage2_var8",
+    "stage2_var9",
+    "stage2_var10",
+    "stage2_var11",
+    "stage2_var12"
+  ],
+  "alpha": 0.35,
+  "noise_std_ratio": 0.01,
+  "interval_min": 15,
+  "l_max": 23,
+  "seed": 42,
+  "n_rows": 35039
+}

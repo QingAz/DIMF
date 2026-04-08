@@ -20,6 +20,12 @@ class PreparedData:
     sample_indices_train: Optional[np.ndarray] = None
     sample_indices_val: Optional[np.ndarray] = None
     sample_indices_test: Optional[np.ndarray] = None
+    timestamps_train: Optional[np.ndarray] = None
+    timestamps_val: Optional[np.ndarray] = None
+    timestamps_test: Optional[np.ndarray] = None
+    extra_targets_train: Optional[Dict[str, np.ndarray]] = None
+    extra_targets_val: Optional[Dict[str, np.ndarray]] = None
+    extra_targets_test: Optional[Dict[str, np.ndarray]] = None
 
 def _infer_groups(df: pd.DataFrame, time_col: str, target_col: str,
                   feed_prefix: str, s1_prefix: str, s2_prefix: str, s3_prefix: str):
@@ -38,12 +44,38 @@ def _infer_groups(df: pd.DataFrame, time_col: str, target_col: str,
         groups[k] = sorted(groups[k])
     return groups
 
+
+def _mask_col_name(col: str) -> str:
+    return f"mask_{col}"
+
 def _split_rows(df: pd.DataFrame, train_ratio: float, val_ratio: float, test_ratio: float):
     assert abs(train_ratio + val_ratio + test_ratio - 1.0) < 1e-6
     n = len(df)
     n_train = int(n * train_ratio)
     n_val = int(n * val_ratio)
     return df.iloc[:n_train].copy(), df.iloc[n_train:n_train+n_val].copy(), df.iloc[n_train+n_val:].copy()
+
+
+def _split_predefined_rows(
+    df: pd.DataFrame,
+    time_col: str,
+    split_col: str,
+):
+    parts = []
+    for split_name in ["train", "val", "test"]:
+        df_part = (
+            df.loc[df[split_col] == split_name]
+            .sort_values(time_col)
+            .reset_index(drop=True)
+            .copy()
+        )
+        if df_part.empty:
+            raise ValueError(f"No rows found for split='{split_name}' in column '{split_col}'")
+        # 进入各自切分后，split 列不再参与后续正则化和特征构造。
+        if split_col in df_part.columns:
+            df_part = df_part.drop(columns=[split_col])
+        parts.append(df_part)
+    return tuple(parts)
 
 def _valid_segment_end_indices(
     df: pd.DataFrame,
@@ -110,6 +142,200 @@ def _split_valid_segments(
     )
     return parts, sample_indices
 
+
+def _split_predefined_valid_segments(
+    df: pd.DataFrame,
+    time_col: str,
+    split_col: str,
+    history_steps: int,
+    horizon_steps: int,
+    collection_interval_min: int,
+):
+    total_steps = history_steps + horizon_steps
+    parts = []
+    sample_indices = []
+
+    for split_name in ["train", "val", "test"]:
+        df_part = (
+            df.loc[df[split_col] == split_name]
+            .sort_values(time_col)
+            .reset_index(drop=True)
+            .copy()
+        )
+        if df_part.empty:
+            raise ValueError(f"No rows found for split='{split_name}' in column '{split_col}'")
+
+        valid_end = _valid_segment_end_indices(
+            df_part,
+            time_col=time_col,
+            total_steps=total_steps,
+            collection_interval_min=collection_interval_min,
+        )
+        if len(valid_end) == 0:
+            raise ValueError(
+                f"No valid contiguous windows found for split='{split_name}' under predefined split mode"
+            )
+
+        parts.append(df_part)
+        sample_indices.append(valid_end - horizon_steps - 1)
+
+    return tuple(parts), tuple(sample_indices)
+
+
+def _regularize_split_with_gap_policy(
+    df_part: pd.DataFrame,
+    time_col: str,
+    collection_interval_min: int,
+    gap_break_min: int,
+    gap_fill_min: int,
+    fillna: str,
+    use_delta_t: bool,
+) -> pd.DataFrame:
+    """
+    按照“两阈值策略”处理单个时间切分：
+    1. gap > G_break 时切成新的 segment；
+    2. 在每个 segment 内仅对 gap <= G_fill 的小缺口补齐到 15 min 网格；
+    3. gap 介于 (G_fill, G_break] 时保留原始断点，不做强行补齐。
+    """
+    if df_part.empty:
+        return df_part.copy()
+    if gap_fill_min > gap_break_min:
+        raise ValueError("gap_fill_min must be <= gap_break_min")
+
+    df_part = df_part.sort_values(time_col).reset_index(drop=True).copy()
+    interval = pd.Timedelta(minutes=collection_interval_min)
+    meta_cols = {"segment_id", "is_real_observation", "is_small_gap_fill", "delta_t_min"}
+    value_cols = [c for c in df_part.columns if c != time_col and c not in meta_cols]
+    mask_cols = [_mask_col_name(c) for c in value_cols]
+
+    delta_minutes = df_part[time_col].diff().dt.total_seconds().div(60.0)
+    raw_segment_id = delta_minutes.gt(float(gap_break_min)).fillna(False).cumsum().astype(np.int64)
+    df_part["_raw_segment_id"] = raw_segment_id
+
+    regularized_parts = []
+    for segment_id, segment_df in df_part.groupby("_raw_segment_id", sort=True):
+        segment_df = segment_df.drop(columns="_raw_segment_id").sort_values(time_col).reset_index(drop=True).copy()
+        segment_df["is_real_observation"] = 1
+        segment_df["is_small_gap_fill"] = 0
+        segment_df["segment_id"] = int(segment_id)
+        if use_delta_t:
+            # 使用原始（未规则化）真实观测之间的时间差。
+            # 对插补出来的规则网格位置，后面会继承“下一条真实观测”的原始 gap 大小，
+            # 从而保留小缺口发生过的证据，而不是在规则化后全部退化成 15 min。
+            segment_df["delta_t_min"] = (
+                segment_df[time_col].diff().dt.total_seconds().div(60.0).fillna(0.0).astype(np.float32)
+            )
+        for col in value_cols:
+            # 第 3 点修改：mask=1 表示该特征在原始数据中真实存在，mask=0 表示后续需要依赖重采样/插补。
+            segment_df[_mask_col_name(col)] = segment_df[col].notna().astype(np.int8)
+
+        # 先在 segment 内建立完整的规则时间网格，再只保留“真实点 + 可补齐的小缺口”。
+        full_grid = pd.date_range(
+            start=segment_df[time_col].iloc[0],
+            end=segment_df[time_col].iloc[-1],
+            freq=interval,
+        )
+        fillable_times = []
+        for prev_ts, cur_ts in zip(segment_df[time_col], segment_df[time_col].iloc[1:]):
+            gap = cur_ts - prev_ts
+            gap_minutes = int(gap.total_seconds() // 60)
+            if gap <= interval:
+                continue
+            if gap_minutes <= gap_fill_min and gap_minutes % collection_interval_min == 0:
+                n_missing = gap_minutes // collection_interval_min - 1
+                for step in range(1, n_missing + 1):
+                    fillable_times.append(prev_ts + step * interval)
+
+        segment_grid = segment_df.set_index(time_col).reindex(full_grid)
+        segment_grid.index.name = time_col
+        segment_grid["segment_id"] = int(segment_id)
+        segment_grid["is_real_observation"] = segment_grid["is_real_observation"].fillna(0).astype(np.int8)
+        segment_grid["is_small_gap_fill"] = pd.Index(segment_grid.index).isin(fillable_times).astype(np.int8)
+        if use_delta_t:
+            # 补齐位置没有原始真实观测；这里让它继承“下一条真实观测”的原始 gap 大小，
+            # 让模型能在整个小缺口区域感知到不规则采样信号。
+            segment_grid["delta_t_min"] = (
+                segment_grid["delta_t_min"].bfill().fillna(0.0).astype(np.float32)
+            )
+        for col in value_cols:
+            segment_grid[_mask_col_name(col)] = segment_grid[_mask_col_name(col)].fillna(0).astype(np.int8)
+
+        keep_mask = segment_grid["is_real_observation"].eq(1) | segment_grid["is_small_gap_fill"].eq(1)
+        segment_grid = segment_grid.loc[keep_mask].copy()
+
+        # 只对保留下来的小缺口做补值，避免跨中/大缺口传播信息。
+        fill_cols = value_cols
+        if fillna == "ffill":
+            segment_grid[fill_cols] = segment_grid[fill_cols].ffill().bfill()
+        elif fillna == "bfill":
+            segment_grid[fill_cols] = segment_grid[fill_cols].bfill().ffill()
+        elif fillna == "zero":
+            segment_grid[fill_cols] = segment_grid[fill_cols].fillna(0.0)
+        elif fillna in {"none", None}:
+            pass
+        else:
+            raise ValueError(f"Unknown fillna: {fillna}")
+
+        regularized_parts.append(segment_grid.reset_index())
+
+    out = pd.concat(regularized_parts, ignore_index=True)
+    aux_cols = ["delta_t_min"] if use_delta_t else []
+    ordered_cols = [time_col] + value_cols + aux_cols + mask_cols + ["segment_id", "is_real_observation", "is_small_gap_fill"]
+    out = out[ordered_cols].sort_values(time_col).reset_index(drop=True)
+    return out
+
+
+def _sample_indices_from_regularized_split(
+    df_part: pd.DataFrame,
+    time_col: str,
+    history_steps: Optional[int],
+    horizon_steps: Optional[int],
+    collection_interval_min: int,
+) -> Optional[np.ndarray]:
+    if history_steps is None or horizon_steps is None:
+        return None
+    required_cols = {time_col, "segment_id", "is_real_observation"}
+    missing_cols = required_cols.difference(df_part.columns)
+    if missing_cols:
+        raise ValueError(f"Missing required columns for sample construction: {sorted(missing_cols)}")
+
+    # 第 4 点修改：严格按 segment 内滑动窗口构造样本。
+    # 一个候选样本只有在下面四个条件都满足时才保留：
+    # 1. 窗口完全处于同一个 segment；
+    # 2. 当前时刻 t 为真实观测点；
+    # 3. 标签时刻 t+H 为真实观测点；
+    # 4. 该 segment 长度至少满足 L+H。
+    total_steps = history_steps + horizon_steps
+    expected_span = pd.Timedelta(minutes=collection_interval_min * (total_steps - 1))
+    sample_indices = []
+
+    for _, segment_df in df_part.groupby("segment_id", sort=True):
+        segment_df = segment_df.reset_index().rename(columns={"index": "_global_index"})
+        seg_len = len(segment_df)
+        if seg_len < total_steps:
+            continue
+
+        for local_t in range(history_steps - 1, seg_len - horizon_steps):
+            start_local = local_t - history_steps + 1
+            label_local = local_t + horizon_steps
+
+            # 保证整个 [t-L+1, ..., t, ..., t+H] 处于 15 min 规则连续网格上。
+            actual_span = segment_df[time_col].iloc[label_local] - segment_df[time_col].iloc[start_local]
+            if actual_span != expected_span:
+                continue
+
+            # 当前时刻和标签时刻都必须对应原始真实观测点，而不是补齐点。
+            if int(segment_df["is_real_observation"].iloc[local_t]) != 1:
+                continue
+            if int(segment_df["is_real_observation"].iloc[label_local]) != 1:
+                continue
+
+            sample_indices.append(int(segment_df["_global_index"].iloc[local_t]))
+
+    if len(sample_indices) == 0:
+        raise ValueError("No valid in-segment samples found under the requested L/H and observation constraints")
+    return np.asarray(sample_indices, dtype=np.int64)
+
 def load_and_prepare(
     csv_path: str,
     time_col: str,
@@ -127,73 +353,113 @@ def load_and_prepare(
     history_steps: Optional[int] = None,
     horizon_steps: Optional[int] = None,
     collection_interval_min: int = 15,
+    gap_break_min: int = 120,
+    gap_fill_min: int = 60,
+    use_missing_mask: bool = True,
     include_target_history: bool = False,
+    split_col: str = "split",
 ) -> Tuple[PreparedData, Dict[str, List[str]]]:
     df = pd.read_csv(csv_path)
     df[time_col] = pd.to_datetime(df[time_col])
     df = df.sort_values(time_col).reset_index(drop=True)
 
-    # delta_t feature (minutes)
-    if use_delta_t:
-        df["delta_t_min"] = (df[time_col].diff().dt.total_seconds().fillna(0.0) / 60.0).astype(np.float32)
-
-    # fill missing values (only features/target, not timestamp)
-    feature_cols = [c for c in df.columns if c != time_col]
-    if fillna == "ffill":
-        df[feature_cols] = df[feature_cols].ffill().bfill()
-    elif fillna == "bfill":
-        df[feature_cols] = df[feature_cols].bfill().ffill()
-    elif fillna == "zero":
-        df[feature_cols] = df[feature_cols].fillna(0.0)
-    else:
-        raise ValueError(f"Unknown fillna: {fillna}")
-
     groups = _infer_groups(df, time_col, target_col, feed_prefix, stage1_prefix, stage2_prefix, stage3_prefix)
     if include_target_history and target_col not in groups["stage3"]:
         groups["stage3"] = groups["stage3"] + [target_col]
-    if use_delta_t:
-        for k in groups:
-            groups[k] = groups[k] + ["delta_t_min"]
 
-    if split_mode == "rows":
-        (df_train, df_val, df_test) = _split_rows(df, train_ratio, val_ratio, test_ratio)
-        sample_indices_train = sample_indices_val = sample_indices_test = None
-    elif split_mode == "valid_segments":
-        if history_steps is None or horizon_steps is None:
-            raise ValueError("history_steps and horizon_steps are required when split_mode='valid_segments'")
-        (df_train, df_val, df_test), sample_indices = _split_valid_segments(
-            df=df,
-            time_col=time_col,
-            train_ratio=train_ratio,
-            val_ratio=val_ratio,
-            test_ratio=test_ratio,
-            history_steps=history_steps,
-            horizon_steps=horizon_steps,
-            collection_interval_min=collection_interval_min,
-        )
-        sample_indices_train, sample_indices_val, sample_indices_test = sample_indices
+    # 第二点修改：先按时间顺序切分原始数据，再在各自切分内独立做“两阈值策略”，避免跨切分信息泄露。
+    if split_mode in {"rows", "valid_segments"}:
+        raw_parts = _split_rows(df, train_ratio, val_ratio, test_ratio)
+    elif split_mode == "predefined_valid_segments":
+        if split_col not in df.columns:
+            raise ValueError(f"Missing split column '{split_col}' for predefined split mode")
+        raw_parts = _split_predefined_rows(df, time_col=time_col, split_col=split_col)
     else:
         raise ValueError(f"Unknown split_mode: {split_mode}")
 
+    df_train, df_val, df_test = [
+        _regularize_split_with_gap_policy(
+            df_part=part,
+            time_col=time_col,
+            collection_interval_min=collection_interval_min,
+            gap_break_min=gap_break_min,
+            gap_fill_min=gap_fill_min,
+            fillna=fillna,
+            use_delta_t=use_delta_t,
+        )
+        for part in raw_parts
+    ]
+
+    # 第 3 点修改：模型输入顺序固定为“工段原始特征 + 共享 delta_t + 当前工段 mask”。
+    groups_with_aux = {}
+    for group_name, base_cols in groups.items():
+        group_cols = list(base_cols)
+        if use_delta_t:
+            group_cols.append("delta_t_min")
+        if use_missing_mask:
+            group_cols.extend([_mask_col_name(col) for col in base_cols])
+        groups_with_aux[group_name] = group_cols
+    groups = groups_with_aux
+
+    sample_indices_train = _sample_indices_from_regularized_split(
+        df_train,
+        time_col=time_col,
+        history_steps=history_steps,
+        horizon_steps=horizon_steps,
+        collection_interval_min=collection_interval_min,
+    )
+    sample_indices_val = _sample_indices_from_regularized_split(
+        df_val,
+        time_col=time_col,
+        history_steps=history_steps,
+        horizon_steps=horizon_steps,
+        collection_interval_min=collection_interval_min,
+    )
+    sample_indices_test = _sample_indices_from_regularized_split(
+        df_test,
+        time_col=time_col,
+        history_steps=history_steps,
+        horizon_steps=horizon_steps,
+        collection_interval_min=collection_interval_min,
+    )
+
     # fit scalers on TRAIN only (avoid leakage)
     x_cols_all = sorted(set(sum(groups.values(), [])))
-    scaler_x = StandardScaler().fit(df_train[x_cols_all].values)
+    mask_cols_all = sorted([c for c in x_cols_all if c.startswith("mask_")])
+    scaled_x_cols = [c for c in x_cols_all if c not in mask_cols_all]
+    scaler_x = StandardScaler().fit(df_train[scaled_x_cols].values)
     scaler_y = StandardScaler().fit(df_train[[target_col]].values)
-
-    col_to_idx = {c: i for i, c in enumerate(x_cols_all)}
+    scaled_col_to_idx = {c: i for i, c in enumerate(scaled_x_cols)}
 
     def transform(df_part):
-        X_all = scaler_x.transform(df_part[x_cols_all].values).astype(np.float32)
+        scaled_x_all = scaler_x.transform(df_part[scaled_x_cols].values).astype(np.float32)
         X_groups = {}
         for g, cols in groups.items():
-            idxs = [col_to_idx[c] for c in cols]
-            X_groups[g] = X_all[:, idxs]
+            group_arrays = []
+            for col in cols:
+                if col in mask_cols_all:
+                    # mask 保持 0/1 语义，不做标准化。
+                    group_arrays.append(df_part[[col]].values.astype(np.float32))
+                else:
+                    group_arrays.append(scaled_x_all[:, [scaled_col_to_idx[col]]])
+            X_groups[g] = np.concatenate(group_arrays, axis=1).astype(np.float32)
         y = scaler_y.transform(df_part[[target_col]].values).astype(np.float32).reshape(-1)
         return X_groups, y
+
+    def extract_extra_targets(df_part: pd.DataFrame) -> Optional[Dict[str, np.ndarray]]:
+        extra_targets = {}
+        if "lag_gt" in df_part.columns:
+            extra_targets["stage1_to_stage2_lag_gt"] = (
+                df_part["lag_gt"].fillna(-1).astype(np.int64).to_numpy()
+            )
+        return extra_targets or None
 
     Xtr, ytr = transform(df_train)
     Xva, yva = transform(df_val)
     Xte, yte = transform(df_test)
+    extra_tr = extract_extra_targets(df_train)
+    extra_va = extract_extra_targets(df_val)
+    extra_te = extract_extra_targets(df_test)
 
     group_dims = {k: v.shape[1] for k, v in Xtr.items()}
 
@@ -206,5 +472,11 @@ def load_and_prepare(
         sample_indices_train=sample_indices_train,
         sample_indices_val=sample_indices_val,
         sample_indices_test=sample_indices_test,
+        timestamps_train=df_train[time_col].dt.strftime("%Y-%m-%d %H:%M").to_numpy(),
+        timestamps_val=df_val[time_col].dt.strftime("%Y-%m-%d %H:%M").to_numpy(),
+        timestamps_test=df_test[time_col].dt.strftime("%Y-%m-%d %H:%M").to_numpy(),
+        extra_targets_train=extra_tr,
+        extra_targets_val=extra_va,
+        extra_targets_test=extra_te,
     )
     return prepared, groups

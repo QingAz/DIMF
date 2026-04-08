@@ -8,5 +8,6 @@ artifacts/
 outputs/
 logs/
 .pyuser/
+.venv-quest/
 
 .DS_Store

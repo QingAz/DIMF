@@ -19,15 +19,19 @@ data:
 
   # windowing
   L: 96            # history length (steps)
-  H: 4             # horizon (steps) -- can be overridden by CLI
+  H: 4             # 固定提前量（步），预测单个 y_{t+H}
   L_max: 48        # max lag candidates (<= L-1)
+  collection_interval_min: 15
+  gap_break_min: 120   # gap > 120 min 时切分为新的 segment
+  gap_fill_min: 60     # 仅对不超过 60 min 的小缺口补齐
 
   # missing handling
   fillna: ffill    # ffill / bfill / zero
   use_delta_t: true
+  use_missing_mask: true   # 每个工段输入追加对应特征的 0/1 缺失掩码
 
 model:
-  encoder: transformer   # gru / lstm / transformer
+  encoder: transformer   # gru / lstm / transformer；当前默认使用因果 Transformer
   hidden_dim: 64
   num_layers: 3
   dropout: 0.0
@@ -35,6 +39,8 @@ model:
   # delay alignment
   attn_dim: 64
   lag_emb: true
+  align_tau: 0.7   # softmax 温度 τ；越小分布越尖锐
+  align_dropout: 0.0   # 训练期对对齐消息随机置零的概率 p_align
 
   # transformer only
   transformer_nhead: 4
@@ -46,11 +52,14 @@ train:
   lr: 0.0005
   weight_decay: 0.0001
   grad_clip: 1.0
-  early_stop_patience: 50
 
   # regularization weights
+  pred_warmup_epochs: 10   # 前若干个 epoch 仅优化 L_pred
+  ramp_epochs: 20          # 随后在线性升权阶段把正则权重从 0 拉到目标值
+  lambda_align: 0.1
   lambda_ent: 0.005
   lambda_tv: 0.01
+  align_loss_temp: 0.2   # 对齐一致性损失的 InfoNCE 温度
 
 logging:
   output_dir: outputs

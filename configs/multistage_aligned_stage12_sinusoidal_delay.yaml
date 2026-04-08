@@ -1,0 +1,57 @@
+seed: 42
+seeds: [42, 134, 456, 321, 712]
+
+data:
+  csv_path: data/synthetic_delay/stage1_to_stage2_sinusoidal/LiquidSugar_stage1_to_stage2_sinusoidal.csv
+  time_col: TimeStamp
+  target_col: yield_flow
+
+  feed_prefix: feed_
+  stage1_prefix: stage1_
+  stage2_prefix: stage2_
+  stage3_prefix: stage3_
+
+  split_mode: valid_segments
+  collection_interval_min: 15
+  train_ratio: 0.8
+  val_ratio: 0.1
+  test_ratio: 0.1
+
+  L: 24
+  H: 1
+  L_max: 23
+
+  fillna: ffill
+  use_delta_t: false
+  include_target_history: true
+
+model:
+  encoder: transformer
+  hidden_dim: 64
+  num_layers: 2
+  dropout: 0.1
+  attn_dim: 64
+  lag_emb: true
+  transformer_nhead: 4
+  transformer_ff_dim: 256
+
+train:
+  epochs: 150
+  batch_size: 64
+  lr: 0.0005
+  weight_decay: 0.0001
+  grad_clip: 1.0
+  lambda_ent: 0.002
+  lambda_tv: 0.005
+
+logging:
+  output_dir: outputs/stage12_sinusoidal_delay
+  log_path: outputs/stage12_sinusoidal_delay/train_log.jsonl
+  ckpt_path: artifacts/stage12_sinusoidal_delay/best.ckpt
+  scaler_path: artifacts/stage12_sinusoidal_delay/scaler.pkl
+
+analysis:
+  delay_truth_path: data/synthetic_delay/stage1_to_stage2_sinusoidal/delay_truth.csv
+  target_edge: stage1_to_stage2
+  raw_reference_path: data/LiquidSugar.csv
+  long_gap_min_slots: 8
