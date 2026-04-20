@@ -8,6 +8,14 @@ from sklearn.preprocessing import StandardScaler
 
 @dataclass
 class PreparedData:
+    """
+    训练入口真正消费的数据载体。
+
+    这里同时保存：
+    1. train/val/test 三个切分下、按工段拆分好的特征矩阵；
+    2. 目标值与标准化器；
+    3. 合法样本中心索引、时间戳以及辅助监督目标。
+    """
     X_groups_train: Dict[str, np.ndarray]
     y_train: np.ndarray
     X_groups_val: Dict[str, np.ndarray]
@@ -29,6 +37,7 @@ class PreparedData:
 
 def _infer_groups(df: pd.DataFrame, time_col: str, target_col: str,
                   feed_prefix: str, s1_prefix: str, s2_prefix: str, s3_prefix: str):
+    # 通过列名前缀把原始变量归入四个工段，time/target 列不参与分组。
     cols = [c for c in df.columns if c not in [time_col, target_col]]
     groups = {"feed": [], "stage1": [], "stage2": [], "stage3": []}
     for c in cols:
@@ -46,9 +55,11 @@ def _infer_groups(df: pd.DataFrame, time_col: str, target_col: str,
 
 
 def _mask_col_name(col: str) -> str:
+    # mask 列命名统一收口在这里，避免不同模块手写字符串时不一致。
     return f"mask_{col}"
 
 def _split_rows(df: pd.DataFrame, train_ratio: float, val_ratio: float, test_ratio: float):
+    # 最朴素的切分方式：按时间排序后的行号直接切 train/val/test。
     assert abs(train_ratio + val_ratio + test_ratio - 1.0) < 1e-6
     n = len(df)
     n_train = int(n * train_ratio)
@@ -61,6 +72,7 @@ def _split_predefined_rows(
     time_col: str,
     split_col: str,
 ):
+    # 使用数据表里预先给好的 split 标签切分，并在每个切分内重新按时间排序。
     parts = []
     for split_name in ["train", "val", "test"]:
         df_part = (
@@ -85,6 +97,7 @@ def _valid_segment_end_indices(
 ) -> np.ndarray:
     if total_steps <= 0:
         raise ValueError("total_steps must be positive")
+    # 一个合法样本需要覆盖 history+future 共 total_steps 个规则时间点。
     target_delta = pd.Timedelta(minutes=collection_interval_min * (total_steps - 1))
     ends = []
     # Match MultistageNet's segment enumeration exactly:
@@ -108,6 +121,7 @@ def _split_valid_segments(
 ):
     assert abs(train_ratio + val_ratio + test_ratio - 1.0) < 1e-6
     total_steps = history_steps + horizon_steps
+    # 先枚举整个原始序列中所有“能形成完整连续窗口”的终点位置。
     valid_end = _valid_segment_end_indices(df, time_col, total_steps, collection_interval_min)
     if len(valid_end) == 0:
         raise ValueError("No valid contiguous windows found for the requested history/horizon")
@@ -122,6 +136,8 @@ def _split_valid_segments(
     val_end = valid_end[n_train:n_train + n_val]
     test_end = valid_end[n_train + n_val:]
 
+    # 为了让每个切分仍保留形成这些样本所需的历史上下文，
+    # val/test 的起点会适当前移 total_steps。
     train_border1, train_border2 = 0, int(val_end.min())
     val_border1, val_border2 = int(val_end.min() - total_steps), int(test_end.min())
     test_border1, test_border2 = int(test_end.min() - total_steps), len(df)
@@ -133,6 +149,7 @@ def _split_valid_segments(
     )
 
     def to_local_t(sample_end: np.ndarray, border1: int) -> np.ndarray:
+        # sample_end 指向窗口右边界后一位，因此要减去 horizon 和 1 才能回到样本中心时刻 t。
         return sample_end - border1 - horizon_steps - 1
 
     sample_indices = (
@@ -156,6 +173,7 @@ def _split_predefined_valid_segments(
     sample_indices = []
 
     for split_name in ["train", "val", "test"]:
+        # 预定义切分模式下，每个 split 内部仍然只保留可形成完整连续窗口的样本。
         df_part = (
             df.loc[df[split_col] == split_name]
             .sort_values(time_col)
@@ -190,7 +208,7 @@ def _regularize_split_with_gap_policy(
     gap_fill_min: int,
     fillna: str,
     use_delta_t: bool,
-) -> pd.DataFrame:
+    ) -> pd.DataFrame:
     """
     按照“两阈值策略”处理单个时间切分：
     1. gap > G_break 时切成新的 segment；
@@ -202,6 +220,7 @@ def _regularize_split_with_gap_policy(
     if gap_fill_min > gap_break_min:
         raise ValueError("gap_fill_min must be <= gap_break_min")
 
+    # 先按时间排序，后续所有 segment 划分和规则网格都基于这个有序时间轴。
     df_part = df_part.sort_values(time_col).reset_index(drop=True).copy()
     interval = pd.Timedelta(minutes=collection_interval_min)
     meta_cols = {"segment_id", "is_real_observation", "is_small_gap_fill", "delta_t_min"}
@@ -214,6 +233,7 @@ def _regularize_split_with_gap_policy(
 
     regularized_parts = []
     for segment_id, segment_df in df_part.groupby("_raw_segment_id", sort=True):
+        # 每个 segment 独立处理，避免跨大缺口做插补或传播统计量。
         segment_df = segment_df.drop(columns="_raw_segment_id").sort_values(time_col).reset_index(drop=True).copy()
         segment_df["is_real_observation"] = 1
         segment_df["is_small_gap_fill"] = 0
@@ -241,11 +261,13 @@ def _regularize_split_with_gap_policy(
             gap_minutes = int(gap.total_seconds() // 60)
             if gap <= interval:
                 continue
+            # 只有 gap 足够小、且正好是采样间隔的整数倍时，才允许补齐中间点。
             if gap_minutes <= gap_fill_min and gap_minutes % collection_interval_min == 0:
                 n_missing = gap_minutes // collection_interval_min - 1
                 for step in range(1, n_missing + 1):
                     fillable_times.append(prev_ts + step * interval)
 
+        # reindex 之后，原本缺失的规则时间点会显式出现在表里，便于后续筛选“可补的小缺口”。
         segment_grid = segment_df.set_index(time_col).reindex(full_grid)
         segment_grid.index.name = time_col
         segment_grid["segment_id"] = int(segment_id)
@@ -359,6 +381,14 @@ def load_and_prepare(
     include_target_history: bool = False,
     split_col: str = "split",
 ) -> Tuple[PreparedData, Dict[str, List[str]]]:
+    """
+    从原始 CSV 走完整个 DIMF 输入准备流程：
+    1. 读表并按列前缀识别工段；
+    2. 先切分，再在各切分内做时间规则化与缺口处理；
+    3. 组装“原始特征 + delta_t + mask”；
+    4. 仅用训练集拟合标准化器；
+    5. 返回模型训练所需的全部张量化前数据。
+    """
     df = pd.read_csv(csv_path)
     df[time_col] = pd.to_datetime(df[time_col])
     df = df.sort_values(time_col).reset_index(drop=True)
@@ -393,6 +423,7 @@ def load_and_prepare(
     # 第 3 点修改：模型输入顺序固定为“工段原始特征 + 共享 delta_t + 当前工段 mask”。
     groups_with_aux = {}
     for group_name, base_cols in groups.items():
+        # 这里的列顺序就是后面张量最后一维的顺序，必须保持稳定。
         group_cols = list(base_cols)
         if use_delta_t:
             group_cols.append("delta_t_min")
@@ -424,6 +455,7 @@ def load_and_prepare(
     )
 
     # fit scalers on TRAIN only (avoid leakage)
+    # mask 列保留 0/1 含义，不参与标准化；其余数值特征统一按训练集统计量缩放。
     x_cols_all = sorted(set(sum(groups.values(), [])))
     mask_cols_all = sorted([c for c in x_cols_all if c.startswith("mask_")])
     scaled_x_cols = [c for c in x_cols_all if c not in mask_cols_all]
@@ -432,6 +464,7 @@ def load_and_prepare(
     scaled_col_to_idx = {c: i for i, c in enumerate(scaled_x_cols)}
 
     def transform(df_part):
+        # 先一次性标准化全部可缩放列，再按工段拆回字典，减少重复计算。
         scaled_x_all = scaler_x.transform(df_part[scaled_x_cols].values).astype(np.float32)
         X_groups = {}
         for g, cols in groups.items():
@@ -447,6 +480,7 @@ def load_and_prepare(
         return X_groups, y
 
     def extract_extra_targets(df_part: pd.DataFrame) -> Optional[Dict[str, np.ndarray]]:
+        # 这里统一收口所有“不是主回归目标、但训练时可能会用到”的辅助监督标签。
         extra_targets = {}
         if "lag_gt" in df_part.columns:
             extra_targets["stage1_to_stage2_lag_gt"] = (
@@ -463,6 +497,7 @@ def load_and_prepare(
 
     group_dims = {k: v.shape[1] for k, v in Xtr.items()}
 
+    # 时间戳保留成字符串，便于直接导出到 csv/日志里做可视化和误差对齐分析。
     prepared = PreparedData(
         X_groups_train=Xtr, y_train=ytr,
         X_groups_val=Xva, y_val=yva,

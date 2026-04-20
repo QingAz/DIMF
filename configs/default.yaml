@@ -59,6 +59,19 @@ train:
   lambda_align: 0.1
   lambda_ent: 0.005
   lambda_tv: 0.01
+  lambda_lag_supervision: 0.0
+  lambda_lag_binary_aux: 0.0
+  lambda_lag_pos_expected_aux: 0.0
+  lambda_lag_zero: 0.0
+  lambda_lag_occurrence: 1.0
+  lambda_lag_positive: 1.0
+  lag_binary_aux_gamma: 0.0
+  lag_binary_aux_pos_weight: null
+  lag_zero_mode: nll_zero
+  lag_supervision_edge: null
+  lag_supervision_key: null
+  lag_supervision_weighting: none
+  lag_occurrence_weighting: balanced
   align_loss_temp: 0.2   # 对齐一致性损失的 InfoNCE 温度
 
 logging:

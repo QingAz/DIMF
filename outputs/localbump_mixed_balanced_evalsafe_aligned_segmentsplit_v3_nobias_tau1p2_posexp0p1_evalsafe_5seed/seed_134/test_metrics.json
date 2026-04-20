@@ -1,0 +1,16 @@
+{
+  "MSE": 77.55326080322266,
+  "MAE": 6.0468621253967285,
+  "RMSE": 8.806432723999023,
+  "R2": 0.33611391057479667,
+  "n_test": 2612,
+  "scaled_MSE": 0.9158827066421509,
+  "scaled_MAE": 0.6571279764175415,
+  "scaled_RMSE": 0.9570176005363464,
+  "scaled_R2": 0.3361139094225801,
+  "best_checkpoint_metric": "val_pred",
+  "best_checkpoint_value": 0.4795882715010499,
+  "best_epoch": 11,
+  "epochs_ran": 150,
+  "seed": 134
+}

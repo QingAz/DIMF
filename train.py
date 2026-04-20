@@ -105,9 +105,13 @@ def _compute_lag_class_weights(
     lag_targets: np.ndarray,
     n_classes: int,
     weighting: str,
+    positive_only: bool = False,
 ) -> np.ndarray | None:
     weighting = str(weighting or "none").lower()
-    valid = lag_targets[(lag_targets >= 0) & (lag_targets < n_classes)]
+    if positive_only:
+        valid = lag_targets[(lag_targets > 0) & (lag_targets < n_classes)]
+    else:
+        valid = lag_targets[(lag_targets >= 0) & (lag_targets < n_classes)]
     if valid.size == 0 or weighting == "none":
         return None
 
@@ -128,12 +132,118 @@ def _compute_lag_class_weights(
     return weights
 
 
-def lag_supervision_loss(
+def _compute_occurrence_pos_weight(
+    lag_targets: np.ndarray,
+    weighting: str,
+) -> float | None:
+    weighting = str(weighting or "balanced").lower()
+    valid = lag_targets[lag_targets >= 0]
+    if valid.size == 0 or weighting == "none":
+        return None
+    if weighting != "balanced":
+        raise ValueError(f"Unknown lag occurrence weighting: {weighting}")
+
+    pos = int(np.sum(valid > 0))
+    neg = int(np.sum(valid == 0))
+    if pos == 0 or neg == 0:
+        return None
+    return float(neg) / float(pos)
+
+
+def lag_supervision_terms(
     pi: Dict[str, torch.Tensor],
     X: Dict[str, torch.Tensor],
     edge: str,
     target_key: str,
     class_weights: torch.Tensor | None = None,
+    occurrence_pos_weight: torch.Tensor | None = None,
+    lambda_occurrence: float = 1.0,
+    lambda_positive: float = 1.0,
+) -> Dict[str, torch.Tensor]:
+    if edge not in pi or target_key not in X:
+        reference = next(iter(pi.values()))
+        zero = reference.new_tensor(0.0)
+        return {"lag_occ": zero, "lag_pos": zero, "lag_sup": zero}
+
+    arr = pi[edge]
+    arr_last = arr[:, -1, :] if arr.dim() == 3 else arr
+    lag_target = X[target_key].long()
+    valid = (lag_target >= 0) & (lag_target < arr_last.shape[-1])
+    if not torch.any(valid):
+        zero = arr_last.new_tensor(0.0)
+        return {"lag_occ": zero, "lag_pos": zero, "lag_sup": zero}
+
+    eps = 1e-6
+    probs = arr_last[valid].clamp(min=eps, max=1.0 - eps)
+    target = lag_target[valid]
+    occ_target = target.gt(0).to(probs.dtype)
+    occ_prob = (1.0 - probs[:, 0]).clamp(min=eps, max=1.0 - eps)
+
+    lag_occ = lag_binary_aux_term_from_probs(
+        occ_prob=occ_prob,
+        occ_target=occ_target,
+        occurrence_pos_weight=occurrence_pos_weight,
+        focal_gamma=0.0,
+    )
+
+    lag_pos = probs.new_tensor(0.0)
+    positive_mask = target > 0
+    if torch.any(positive_mask):
+        pos_probs = probs[positive_mask, 1:]
+        pos_probs = pos_probs / pos_probs.sum(dim=-1, keepdim=True).clamp(min=eps)
+        pos_target = target[positive_mask] - 1
+        pos_class_weights = None
+        if class_weights is not None:
+            if class_weights.numel() == probs.shape[-1]:
+                pos_class_weights = class_weights[1:]
+            elif class_weights.numel() == probs.shape[-1] - 1:
+                pos_class_weights = class_weights
+            else:
+                raise ValueError("Positive-lag class weights must have K or K-1 entries")
+            pos_class_weights = pos_class_weights.to(device=pos_probs.device, dtype=pos_probs.dtype)
+        lag_pos = F.nll_loss(
+            pos_probs.clamp(min=eps).log(),
+            pos_target,
+            weight=pos_class_weights,
+            reduction="mean",
+        )
+
+    lag_sup = float(lambda_occurrence) * lag_occ + float(lambda_positive) * lag_pos
+    return {"lag_occ": lag_occ, "lag_pos": lag_pos, "lag_sup": lag_sup}
+
+
+def lag_binary_aux_term_from_probs(
+    occ_prob: torch.Tensor,
+    occ_target: torch.Tensor,
+    occurrence_pos_weight: torch.Tensor | None = None,
+    focal_gamma: float = 0.0,
+) -> torch.Tensor:
+    eps = 1e-6
+    occ_prob = occ_prob.clamp(min=eps, max=1.0 - eps)
+    occ_target = occ_target.to(dtype=occ_prob.dtype)
+
+    if occurrence_pos_weight is None:
+        bce = F.binary_cross_entropy(occ_prob, occ_target, reduction="none")
+    else:
+        pos_weight = occurrence_pos_weight.to(device=occ_prob.device, dtype=occ_prob.dtype)
+        bce = -(
+            pos_weight * occ_target * occ_prob.log()
+            + (1.0 - occ_target) * (1.0 - occ_prob).log()
+        )
+
+    if focal_gamma > 0.0:
+        p_t = occ_target * occ_prob + (1.0 - occ_target) * (1.0 - occ_prob)
+        bce = ((1.0 - p_t).clamp(min=0.0) ** float(focal_gamma)) * bce
+    return bce.mean()
+
+
+def lag_binary_aux_term(
+    pi: Dict[str, torch.Tensor],
+    X: Dict[str, torch.Tensor],
+    edge: str,
+    target_key: str,
+    occurrence_pos_weight: torch.Tensor | None = None,
+    focal_gamma: float = 0.0,
 ) -> torch.Tensor:
     if edge not in pi or target_key not in X:
         reference = next(iter(pi.values()))
@@ -146,9 +256,68 @@ def lag_supervision_loss(
     if not torch.any(valid):
         return arr_last.new_tensor(0.0)
 
-    log_probs = arr_last[valid].clamp(min=1e-12).log()
-    target = lag_target[valid]
-    return F.nll_loss(log_probs, target, weight=class_weights, reduction="mean")
+    probs = arr_last[valid].clamp(min=1e-6, max=1.0 - 1e-6)
+    occ_target = lag_target[valid].gt(0).to(probs.dtype)
+    occ_prob = 1.0 - probs[:, 0]
+    return lag_binary_aux_term_from_probs(
+        occ_prob=occ_prob,
+        occ_target=occ_target,
+        occurrence_pos_weight=occurrence_pos_weight,
+        focal_gamma=focal_gamma,
+    )
+
+
+def lag_positive_expected_aux_term(
+    pi: Dict[str, torch.Tensor],
+    X: Dict[str, torch.Tensor],
+    edge: str,
+    target_key: str,
+) -> torch.Tensor:
+    if edge not in pi or target_key not in X:
+        reference = next(iter(pi.values()))
+        return reference.new_tensor(0.0)
+
+    arr = pi[edge]
+    arr_last = arr[:, -1, :] if arr.dim() == 3 else arr
+    lag_target = X[target_key].long()
+    valid = (lag_target > 0) & (lag_target < arr_last.shape[-1])
+    if not torch.any(valid):
+        return arr_last.new_tensor(0.0)
+
+    probs = arr_last[valid]
+    lag_axis = torch.arange(probs.shape[-1], device=probs.device, dtype=probs.dtype)
+    pred_expected = (probs * lag_axis[None, :]).sum(dim=-1)
+    true_lag = lag_target[valid].to(dtype=probs.dtype)
+    return (pred_expected - true_lag).abs().mean()
+
+
+def lag_zero_penalty_term(
+    pi: Dict[str, torch.Tensor],
+    X: Dict[str, torch.Tensor],
+    edge: str,
+    target_key: str,
+    mode: str = "nll_zero",
+) -> torch.Tensor:
+    if edge not in pi or target_key not in X:
+        reference = next(iter(pi.values()))
+        return reference.new_tensor(0.0)
+
+    arr = pi[edge]
+    arr_last = arr[:, -1, :] if arr.dim() == 3 else arr
+    lag_target = X[target_key].long()
+    valid = lag_target.eq(0)
+    if not torch.any(valid):
+        return arr_last.new_tensor(0.0)
+
+    probs = arr_last[valid].clamp(min=1e-6, max=1.0)
+    mode = str(mode or "nll_zero").lower()
+    if mode in {"nll_zero", "zero_nll", "logprob_zero"}:
+        return -(probs[:, 0].clamp(min=1e-6).log()).mean()
+    if mode in {"expected_lag", "mean_expected_lag"}:
+        lag_axis = torch.arange(probs.shape[-1], device=probs.device, dtype=probs.dtype)
+        pred_expected = (probs * lag_axis[None, :]).sum(dim=-1)
+        return pred_expected.mean()
+    raise ValueError(f"Unknown lag_zero_mode: {mode}")
 
 def to_device(batch, device):
     X, y = batch
@@ -208,13 +377,34 @@ def eval_epoch_metrics(
     lam_ent,
     lam_tv,
     lam_lag_sup,
+    lam_lag_binary_aux,
+    lam_lag_pos_expected_aux,
+    lam_lag_zero,
     align_loss_temp,
     lag_supervision_edge: str | None = None,
     lag_supervision_key: str | None = None,
     lag_class_weights: torch.Tensor | None = None,
+    lag_occurrence_pos_weight: torch.Tensor | None = None,
+    lag_lambda_occurrence: float = 1.0,
+    lag_lambda_positive: float = 1.0,
+    lag_binary_aux_gamma: float = 0.0,
+    lag_zero_mode: str = "nll_zero",
 ):
     model.eval()
-    tot_loss, tot_pred, tot_align, tot_ent, tot_tv, tot_lag_sup, n = 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0
+    tot_loss, tot_pred, tot_align, tot_ent, tot_tv, tot_lag_occ, tot_lag_pos, tot_lag_sup, tot_lag_bin, tot_lag_posexp, tot_lag_zero, n = (
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0,
+    )
     delay_stats = {}
     for batch in loader:
         X, y = to_device(batch, device)
@@ -224,23 +414,72 @@ def eval_epoch_metrics(
         align = alignment_consistency_loss(model.latest_alignment_cache, temperature=align_loss_temp)
         ent = sum(entropy_loss(v) for v in pi.values())
         tv  = sum(tv_loss(v) for v in pi.values())
+        lag_occ = pred.new_tensor(0.0)
+        lag_pos = pred.new_tensor(0.0)
         lag_sup = pred.new_tensor(0.0)
+        lag_bin = pred.new_tensor(0.0)
+        lag_posexp = pred.new_tensor(0.0)
+        lag_zero = pred.new_tensor(0.0)
         if lam_lag_sup > 0.0 and lag_supervision_edge is not None and lag_supervision_key is not None:
-            lag_sup = lag_supervision_loss(
+            lag_terms = lag_supervision_terms(
                 pi,
                 X,
                 edge=lag_supervision_edge,
                 target_key=lag_supervision_key,
                 class_weights=lag_class_weights,
+                occurrence_pos_weight=lag_occurrence_pos_weight,
+                lambda_occurrence=lag_lambda_occurrence,
+                lambda_positive=lag_lambda_positive,
             )
-        loss = pred + lam_align * align + lam_ent * ent + lam_tv * tv + lam_lag_sup * lag_sup
+            lag_occ = lag_terms["lag_occ"]
+            lag_pos = lag_terms["lag_pos"]
+            lag_sup = lag_terms["lag_sup"]
+        if lam_lag_binary_aux > 0.0 and lag_supervision_edge is not None and lag_supervision_key is not None:
+            lag_bin = lag_binary_aux_term(
+                pi,
+                X,
+                edge=lag_supervision_edge,
+                target_key=lag_supervision_key,
+                occurrence_pos_weight=lag_occurrence_pos_weight,
+                focal_gamma=lag_binary_aux_gamma,
+            )
+        if lam_lag_pos_expected_aux > 0.0 and lag_supervision_edge is not None and lag_supervision_key is not None:
+            lag_posexp = lag_positive_expected_aux_term(
+                pi,
+                X,
+                edge=lag_supervision_edge,
+                target_key=lag_supervision_key,
+            )
+        if lam_lag_zero > 0.0 and lag_supervision_edge is not None and lag_supervision_key is not None:
+            lag_zero = lag_zero_penalty_term(
+                pi,
+                X,
+                edge=lag_supervision_edge,
+                target_key=lag_supervision_key,
+                mode=lag_zero_mode,
+            )
+        loss = (
+            pred
+            + lam_align * align
+            + lam_ent * ent
+            + lam_tv * tv
+            + lam_lag_sup * lag_sup
+            + lam_lag_binary_aux * lag_bin
+            + lam_lag_pos_expected_aux * lag_posexp
+            + lam_lag_zero * lag_zero
+        )
         batch_n = y.shape[0]
         tot_loss += float(loss.item()) * batch_n
         tot_pred += float(pred.item()) * batch_n
         tot_align += float(align.item()) * batch_n
         tot_ent += float(ent.item()) * batch_n
         tot_tv += float(tv.item()) * batch_n
+        tot_lag_occ += float(lag_occ.item()) * batch_n
+        tot_lag_pos += float(lag_pos.item()) * batch_n
         tot_lag_sup += float(lag_sup.item()) * batch_n
+        tot_lag_bin += float(lag_bin.item()) * batch_n
+        tot_lag_posexp += float(lag_posexp.item()) * batch_n
+        tot_lag_zero += float(lag_zero.item()) * batch_n
         n += batch_n
         if not delay_stats:
             for edge in pi:
@@ -256,7 +495,12 @@ def eval_epoch_metrics(
         "align": tot_align / denom,
         "ent": tot_ent / denom,
         "tv": tot_tv / denom,
+        "lag_occ": tot_lag_occ / denom,
+        "lag_pos": tot_lag_pos / denom,
         "lag_sup": tot_lag_sup / denom,
+        "lag_bin": tot_lag_bin / denom,
+        "lag_posexp": tot_lag_posexp / denom,
+        "lag_zero": tot_lag_zero / denom,
     }
     out.update(_finalize_delay_stats(delay_stats))
     return out
@@ -438,6 +682,9 @@ def main():
     lam_ent_target  = float(cfg["train"]["lambda_ent"])
     lam_tv_target   = float(cfg["train"]["lambda_tv"])
     lam_lag_sup_target = float(cfg["train"].get("lambda_lag_supervision", 0.0))
+    lam_lag_binary_aux_target = float(cfg["train"].get("lambda_lag_binary_aux", 0.0))
+    lam_lag_pos_expected_aux_target = float(cfg["train"].get("lambda_lag_pos_expected_aux", 0.0))
+    lam_lag_zero_target = float(cfg["train"].get("lambda_lag_zero", 0.0))
     align_loss_temp = float(cfg["train"]["align_loss_temp"])
     pred_warmup_epochs = int(cfg["train"]["pred_warmup_epochs"])
     ramp_epochs = int(cfg["train"]["ramp_epochs"])
@@ -445,6 +692,12 @@ def main():
     lag_supervision_edge = cfg["train"].get("lag_supervision_edge")
     lag_supervision_key = cfg["train"].get("lag_supervision_key")
     lag_supervision_weighting = str(cfg["train"].get("lag_supervision_weighting", "none"))
+    lag_occurrence_weighting = str(cfg["train"].get("lag_occurrence_weighting", "balanced"))
+    lag_lambda_occurrence = float(cfg["train"].get("lambda_lag_occurrence", 1.0))
+    lag_lambda_positive = float(cfg["train"].get("lambda_lag_positive", 1.0))
+    lag_binary_aux_gamma = float(cfg["train"].get("lag_binary_aux_gamma", 0.0))
+    lag_binary_aux_pos_weight = cfg["train"].get("lag_binary_aux_pos_weight")
+    lag_zero_mode = str(cfg["train"].get("lag_zero_mode", "nll_zero"))
     checkpoint_metric = str(cfg["train"].get("checkpoint_metric", "val_loss"))
     checkpoint_after_warmup_only = bool(cfg["train"].get("checkpoint_after_warmup_only", False))
 
@@ -470,32 +723,40 @@ def main():
         align_feed_to_stage1=cfg["model"].get("align_feed_to_stage1"),
         align_stage1_to_stage2=cfg["model"].get("align_stage1_to_stage2"),
         align_stage2_to_stage3=cfg["model"].get("align_stage2_to_stage3"),
-        stage1_to_stage2_confidence_mode=cfg["model"].get("stage1_to_stage2_confidence_mode"),
-        stage1_to_stage2_confidence_require_nonzero_argmax=bool(
-            cfg["model"].get("stage1_to_stage2_confidence_require_nonzero_argmax", False)
-        ),
-        stage1_to_stage2_confidence_peak_threshold=cfg["model"].get("stage1_to_stage2_confidence_peak_threshold"),
-        stage1_to_stage2_confidence_nonzero_threshold=cfg["model"].get("stage1_to_stage2_confidence_nonzero_threshold"),
-        stage1_to_stage2_confidence_sharpness=float(
-            cfg["model"].get("stage1_to_stage2_confidence_sharpness", 20.0)
-        ),
+        use_lag_bias=bool(cfg["model"].get("use_lag_bias", True)),
     ).to(device)
 
     lag_class_weights = None
+    lag_occurrence_pos_weight = None
+    train_lag_targets = None
     if (
-        lam_lag_sup_target > 0.0
-        and lag_supervision_key is not None
+        lag_supervision_key is not None
         and prepared.extra_targets_train is not None
         and lag_supervision_key in prepared.extra_targets_train
     ):
         train_lag_targets = prepared.extra_targets_train[lag_supervision_key][ds_tr.indices]
+    if (
+        lam_lag_sup_target > 0.0
+        and train_lag_targets is not None
+    ):
         weight_values = _compute_lag_class_weights(
             lag_targets=train_lag_targets,
             n_classes=int(cfg["data"]["L_max"]) + 1,
             weighting=lag_supervision_weighting,
+            positive_only=True,
         )
         if weight_values is not None:
             lag_class_weights = torch.tensor(weight_values, dtype=torch.float32, device=device)
+    if (lam_lag_sup_target > 0.0 or lam_lag_binary_aux_target > 0.0) and train_lag_targets is not None:
+        if lag_binary_aux_pos_weight is not None:
+            lag_occurrence_pos_weight = torch.tensor(float(lag_binary_aux_pos_weight), dtype=torch.float32, device=device)
+        else:
+            occurrence_pos_weight = _compute_occurrence_pos_weight(
+                lag_targets=train_lag_targets,
+                weighting=lag_occurrence_weighting,
+            )
+            if occurrence_pos_weight is not None:
+                lag_occurrence_pos_weight = torch.tensor(occurrence_pos_weight, dtype=torch.float32, device=device)
 
     opt = torch.optim.Adam(
         model.parameters(),
@@ -534,7 +795,38 @@ def main():
             pred_warmup_epochs,
             ramp_epochs,
         )
-        tot_loss, tot_pred, tot_align, tot_ent, tot_tv, tot_lag_sup, n = 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0
+        current_lam_lag_binary_aux = _scheduled_regularization_weight(
+            lam_lag_binary_aux_target,
+            epoch,
+            pred_warmup_epochs,
+            ramp_epochs,
+        )
+        current_lam_lag_pos_expected_aux = _scheduled_regularization_weight(
+            lam_lag_pos_expected_aux_target,
+            epoch,
+            pred_warmup_epochs,
+            ramp_epochs,
+        )
+        current_lam_lag_zero = _scheduled_regularization_weight(
+            lam_lag_zero_target,
+            epoch,
+            pred_warmup_epochs,
+            ramp_epochs,
+        )
+        tot_loss, tot_pred, tot_align, tot_ent, tot_tv, tot_lag_occ, tot_lag_pos, tot_lag_sup, tot_lag_bin, tot_lag_posexp, tot_lag_zero, n = (
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0,
+        )
         train_delay_stats = {}
 
         pbar = tqdm(dl_tr, desc=f"Epoch {epoch}")
@@ -547,14 +839,49 @@ def main():
             align = alignment_consistency_loss(model.latest_alignment_cache, temperature=align_loss_temp)
             ent  = sum(entropy_loss(v) for v in pi.values())
             tv   = sum(tv_loss(v) for v in pi.values())
+            lag_occ = pred.new_tensor(0.0)
+            lag_pos = pred.new_tensor(0.0)
             lag_sup = pred.new_tensor(0.0)
+            lag_bin = pred.new_tensor(0.0)
+            lag_posexp = pred.new_tensor(0.0)
+            lag_zero = pred.new_tensor(0.0)
             if current_lam_lag_sup > 0.0 and lag_supervision_edge is not None and lag_supervision_key is not None:
-                lag_sup = lag_supervision_loss(
+                lag_terms = lag_supervision_terms(
                     pi,
                     X,
                     edge=str(lag_supervision_edge),
                     target_key=str(lag_supervision_key),
                     class_weights=lag_class_weights,
+                    occurrence_pos_weight=lag_occurrence_pos_weight,
+                    lambda_occurrence=lag_lambda_occurrence,
+                    lambda_positive=lag_lambda_positive,
+                )
+                lag_occ = lag_terms["lag_occ"]
+                lag_pos = lag_terms["lag_pos"]
+                lag_sup = lag_terms["lag_sup"]
+            if current_lam_lag_binary_aux > 0.0 and lag_supervision_edge is not None and lag_supervision_key is not None:
+                lag_bin = lag_binary_aux_term(
+                    pi,
+                    X,
+                    edge=str(lag_supervision_edge),
+                    target_key=str(lag_supervision_key),
+                    occurrence_pos_weight=lag_occurrence_pos_weight,
+                    focal_gamma=lag_binary_aux_gamma,
+                )
+            if current_lam_lag_pos_expected_aux > 0.0 and lag_supervision_edge is not None and lag_supervision_key is not None:
+                lag_posexp = lag_positive_expected_aux_term(
+                    pi,
+                    X,
+                    edge=str(lag_supervision_edge),
+                    target_key=str(lag_supervision_key),
+                )
+            if current_lam_lag_zero > 0.0 and lag_supervision_edge is not None and lag_supervision_key is not None:
+                lag_zero = lag_zero_penalty_term(
+                    pi,
+                    X,
+                    edge=str(lag_supervision_edge),
+                    target_key=str(lag_supervision_key),
+                    mode=lag_zero_mode,
                 )
             loss = (
                 pred
@@ -562,6 +889,9 @@ def main():
                 + current_lam_ent * ent
                 + current_lam_tv * tv
                 + current_lam_lag_sup * lag_sup
+                + current_lam_lag_binary_aux * lag_bin
+                + current_lam_lag_pos_expected_aux * lag_posexp
+                + current_lam_lag_zero * lag_zero
             )
 
             opt.zero_grad()
@@ -575,7 +905,12 @@ def main():
             tot_align += float(align.item()) * batch_n
             tot_ent += float(ent.item()) * batch_n
             tot_tv += float(tv.item()) * batch_n
+            tot_lag_occ += float(lag_occ.item()) * batch_n
+            tot_lag_pos += float(lag_pos.item()) * batch_n
             tot_lag_sup += float(lag_sup.item()) * batch_n
+            tot_lag_bin += float(lag_bin.item()) * batch_n
+            tot_lag_posexp += float(lag_posexp.item()) * batch_n
+            tot_lag_zero += float(lag_zero.item()) * batch_n
             n += batch_n
             if not train_delay_stats:
                 for edge in pi:
@@ -589,11 +924,19 @@ def main():
                 align=float(align.item()),
                 ent=float(ent.item()),
                 tv=float(tv.item()),
+                lag_occ=float(lag_occ.item()),
+                lag_pos=float(lag_pos.item()),
                 lag_sup=float(lag_sup.item()),
+                lag_bin=float(lag_bin.item()),
+                lag_posexp=float(lag_posexp.item()),
+                lag_zero=float(lag_zero.item()),
                 lam_align=current_lam_align,
                 lam_ent=current_lam_ent,
                 lam_tv=current_lam_tv,
                 lam_lag_sup=current_lam_lag_sup,
+                lam_lag_bin=current_lam_lag_binary_aux,
+                lam_lag_posexp=current_lam_lag_pos_expected_aux,
+                lam_lag_zero=current_lam_lag_zero,
             )
 
         denom = max(n, 1)
@@ -603,7 +946,12 @@ def main():
             "align": tot_align / denom,
             "ent": tot_ent / denom,
             "tv": tot_tv / denom,
+            "lag_occ": tot_lag_occ / denom,
+            "lag_pos": tot_lag_pos / denom,
             "lag_sup": tot_lag_sup / denom,
+            "lag_bin": tot_lag_bin / denom,
+            "lag_posexp": tot_lag_posexp / denom,
+            "lag_zero": tot_lag_zero / denom,
         }
         train_metrics.update(_finalize_delay_stats(train_delay_stats))
         val_metrics = eval_epoch_metrics(
@@ -614,15 +962,23 @@ def main():
             current_lam_ent,
             current_lam_tv,
             current_lam_lag_sup,
+            current_lam_lag_binary_aux,
+            current_lam_lag_pos_expected_aux,
+            current_lam_lag_zero,
             align_loss_temp,
             lag_supervision_edge=str(lag_supervision_edge) if lag_supervision_edge is not None else None,
             lag_supervision_key=str(lag_supervision_key) if lag_supervision_key is not None else None,
             lag_class_weights=lag_class_weights,
+            lag_occurrence_pos_weight=lag_occurrence_pos_weight,
+            lag_lambda_occurrence=lag_lambda_occurrence,
+            lag_lambda_positive=lag_lambda_positive,
+            lag_binary_aux_gamma=lag_binary_aux_gamma,
+            lag_zero_mode=lag_zero_mode,
         )
         train_loss = train_metrics["loss"]
         val = val_metrics["loss"]
         print(
-            "Epoch %d: train_loss=%.6f val_loss=%.6f train_pred=%.6f train_align=%.6f train_ent=%.6f train_tv=%.6f train_lag_sup=%.6f w_align=%.4f w_ent=%.4f w_tv=%.4f w_lag_sup=%.4f val_stage12_lag=%.3f val_stage12_peak=%.3f H=%d"
+            "Epoch %d: train_loss=%.6f val_loss=%.6f train_pred=%.6f train_align=%.6f train_ent=%.6f train_tv=%.6f train_lag_occ=%.6f train_lag_pos=%.6f train_lag_sup=%.6f train_lag_bin=%.6f train_lag_posexp=%.6f train_lag_zero=%.6f w_align=%.4f w_ent=%.4f w_tv=%.4f w_lag_sup=%.4f w_lag_bin=%.4f w_lag_posexp=%.4f w_lag_zero=%.4f val_stage12_lag=%.3f val_stage12_peak=%.3f H=%d"
             % (
                 epoch,
                 train_loss,
@@ -631,11 +987,19 @@ def main():
                 train_metrics["align"],
                 train_metrics["ent"],
                 train_metrics["tv"],
+                train_metrics["lag_occ"],
+                train_metrics["lag_pos"],
                 train_metrics["lag_sup"],
+                train_metrics["lag_bin"],
+                train_metrics["lag_posexp"],
+                train_metrics["lag_zero"],
                 current_lam_align,
                 current_lam_ent,
                 current_lam_tv,
                 current_lam_lag_sup,
+                current_lam_lag_binary_aux,
+                current_lam_lag_pos_expected_aux,
+                current_lam_lag_zero,
                 val_metrics["stage1_to_stage2_expected_lag"],
                 val_metrics["stage1_to_stage2_peak_prob"],
                 int(cfg["data"]["H"]),
@@ -650,16 +1014,37 @@ def main():
                 "train_align": train_metrics["align"],
                 "train_ent": train_metrics["ent"],
                 "train_tv": train_metrics["tv"],
+                "train_lag_occ": train_metrics["lag_occ"],
+                "train_lag_pos": train_metrics["lag_pos"],
                 "train_lag_sup": train_metrics["lag_sup"],
+                "train_lag_bin": train_metrics["lag_bin"],
+                "train_lag_posexp": train_metrics["lag_posexp"],
+                "train_lag_zero": train_metrics["lag_zero"],
                 "current_lambda_align": current_lam_align,
                 "current_lambda_ent": current_lam_ent,
                 "current_lambda_tv": current_lam_tv,
                 "current_lambda_lag_supervision": current_lam_lag_sup,
+                "current_lambda_lag_binary_aux": current_lam_lag_binary_aux,
+                "current_lambda_lag_pos_expected_aux": current_lam_lag_pos_expected_aux,
+                "current_lambda_lag_zero": current_lam_lag_zero,
+                "lambda_lag_occurrence": lag_lambda_occurrence,
+                "lambda_lag_positive": lag_lambda_positive,
+                "lambda_lag_binary_aux": lam_lag_binary_aux_target,
+                "lambda_lag_pos_expected_aux": lam_lag_pos_expected_aux_target,
+                "lambda_lag_zero": lam_lag_zero_target,
+                "lag_binary_aux_gamma": lag_binary_aux_gamma,
+                "lag_binary_aux_pos_weight": None if lag_binary_aux_pos_weight is None else float(lag_binary_aux_pos_weight),
+                "lag_zero_mode": lag_zero_mode,
                 "val_pred": val_metrics["pred"],
                 "val_align": val_metrics["align"],
                 "val_ent": val_metrics["ent"],
                 "val_tv": val_metrics["tv"],
+                "val_lag_occ": val_metrics["lag_occ"],
+                "val_lag_pos": val_metrics["lag_pos"],
                 "val_lag_sup": val_metrics["lag_sup"],
+                "val_lag_bin": val_metrics["lag_bin"],
+                "val_lag_posexp": val_metrics["lag_posexp"],
+                "val_lag_zero": val_metrics["lag_zero"],
                 "train_feed_to_stage1_expected_lag": train_metrics["feed_to_stage1_expected_lag"],
                 "train_feed_to_stage1_peak_prob": train_metrics["feed_to_stage1_peak_prob"],
                 "train_stage1_to_stage2_expected_lag": train_metrics["stage1_to_stage2_expected_lag"],
