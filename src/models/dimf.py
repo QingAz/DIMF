@@ -106,6 +106,7 @@ class DIMF(nn.Module):
         align_stage1_to_stage2: bool | None = None,
         align_stage2_to_stage3: bool | None = None,
         use_lag_bias: bool = True,
+        lag_head_mode: str = "softmax",
     ):
         super().__init__()
         # 第 1 点修改：lead_steps 仅表示固定提前量 H，预测头始终输出单个 y_{t+H}。
@@ -162,6 +163,7 @@ class DIMF(nn.Module):
                     lag_emb,
                     tau=align_tau,
                     use_lag_bias=use_lag_bias,
+                    lag_head_mode=lag_head_mode,
                 )
             return NoDelayAlignment(L_max)
 

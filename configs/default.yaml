@@ -24,6 +24,8 @@ data:
   collection_interval_min: 15
   gap_break_min: 120   # gap > 120 min 时切分为新的 segment
   gap_fill_min: 60     # 仅对不超过 60 min 的小缺口补齐
+  sample_keep_col: null
+  respect_existing_segment_id: false
 
   # missing handling
   fillna: ffill    # ffill / bfill / zero
@@ -41,6 +43,7 @@ model:
   lag_emb: true
   align_tau: 0.7   # softmax 温度 τ；越小分布越尖锐
   align_dropout: 0.0   # 训练期对对齐消息随机置零的概率 p_align
+  lag_head_mode: softmax  # softmax / factorized
 
   # transformer only
   transformer_nhead: 4
@@ -54,6 +57,7 @@ train:
   grad_clip: 1.0
 
   # regularization weights
+  lambda_pred: 1.0
   pred_warmup_epochs: 10   # 前若干个 epoch 仅优化 L_pred
   ramp_epochs: 20          # 随后在线性升权阶段把正则权重从 0 拉到目标值
   lambda_align: 0.1
@@ -62,17 +66,44 @@ train:
   lambda_lag_supervision: 0.0
   lambda_lag_binary_aux: 0.0
   lambda_lag_pos_expected_aux: 0.0
+  lambda_lag_expected_aux: 0.0
+  lambda_lag_soft_target_aux: 0.0
   lambda_lag_zero: 0.0
   lambda_lag_occurrence: 1.0
   lambda_lag_positive: 1.0
   lag_binary_aux_gamma: 0.0
   lag_binary_aux_pos_weight: null
   lag_zero_mode: nll_zero
+  lag_positive_expected_aux_mode: final
+  lag_expected_aux_weighting: none
+  lag_expected_aux_scope: valid
+  lag_expected_aux_decay_start_epoch: 0
+  lag_expected_aux_decay_end_epoch: 200
+  lag_expected_aux_decay_final_scale: 1.0
+  lag_soft_target_weighting: none
+  lag_soft_target_sigma: 1.0
+  lag_soft_target_scope: valid
+  lag_soft_target_mode: final
   lag_supervision_edge: null
   lag_supervision_key: null
+  lag_binary_aux_target_key: null
+  lag_pos_expected_aux_target_key: null
+  lag_expected_aux_target_key: null
+  lag_soft_target_target_key: null
+  lag_zero_target_key: null
   lag_supervision_weighting: none
   lag_occurrence_weighting: balanced
   align_loss_temp: 0.2   # 对齐一致性损失的 InfoNCE 温度
+  checkpoint_min_epoch: 0
+  eval_checkpoint: best
+  checkpoint_save_every: 0
+  alignment_checkpoint_select: false
+  checkpoint_selection_edge: null
+  checkpoint_selection_key: null
+  checkpoint_select_zero_max: 0.5
+  checkpoint_select_far_max: 0.6
+  checkpoint_select_metric: null
+  checkpoint_select_direction: auto
 
 logging:
   output_dir: outputs

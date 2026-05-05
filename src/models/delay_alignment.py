@@ -24,15 +24,21 @@ class DelayAlignment(nn.Module):
         lag_emb: bool = True,
         tau: float = 1.0,
         use_lag_bias: bool = True,
+        lag_head_mode: str = "softmax",
     ):
         super().__init__()
         if tau <= 0:
             raise ValueError("tau must be positive")
         self.L_max = L_max
         self.tau = float(tau)
+        self.lag_head_mode = str(lag_head_mode or "softmax").lower()
+        if self.lag_head_mode not in {"softmax", "factorized"}:
+            raise ValueError(f"Unknown lag_head_mode: {lag_head_mode}")
         self.Wq = nn.Linear(dim, attn_dim, bias=False)
         self.Wk = nn.Linear(dim, attn_dim, bias=False)
         self.Wv = nn.Linear(dim, dim, bias=False)
+        self.occ_head = nn.Linear(dim, 1) if self.lag_head_mode == "factorized" else None
+        self.occ_gap_scale = nn.Parameter(torch.tensor(1.0)) if self.lag_head_mode == "factorized" else None
         # 第 6 点修改：为每个候选 lag 学习独立的延迟先验偏置 b_l。
         self.lag_bias = nn.Parameter(torch.zeros(L_max + 1)) if use_lag_bias else None
         self.scale = attn_dim ** 0.5
@@ -41,6 +47,38 @@ class DelayAlignment(nn.Module):
         if lag_emb:
             # 为每个候选 lag 提供一个可学习的“延迟身份向量”。
             self.emb = nn.Embedding(L_max + 1, dim)
+
+    def _lag_distribution_from_scores(self, alpha: torch.Tensor, down_repr: torch.Tensor) -> torch.Tensor:
+        if self.lag_head_mode == "softmax":
+            return F.softmax(alpha / self.tau, dim=-1)
+
+        if alpha.shape[-1] < 2:
+            return F.softmax(alpha / self.tau, dim=-1)
+
+        scaled = alpha / self.tau
+        zero_score = scaled[..., 0]
+        pos_scores = scaled[..., 1:]
+        has_pos = torch.isfinite(pos_scores).any(dim=-1, keepdim=True)
+        safe_pos_scores = torch.where(has_pos, pos_scores, torch.zeros_like(pos_scores))
+        pos_pi = F.softmax(safe_pos_scores, dim=-1) * has_pos.to(dtype=scaled.dtype)
+
+        pos_evidence = torch.logsumexp(pos_scores, dim=-1) - zero_score
+        pos_evidence = torch.where(
+            has_pos.squeeze(-1),
+            pos_evidence,
+            torch.full_like(pos_evidence, -30.0),
+        )
+        occ_logit = self.occ_head(down_repr).squeeze(-1) + self.occ_gap_scale * pos_evidence
+        nonzero_prob = torch.sigmoid(occ_logit)
+        nonzero_prob = torch.where(
+            has_pos.squeeze(-1),
+            nonzero_prob,
+            torch.zeros_like(nonzero_prob),
+        )
+
+        pi0 = (1.0 - nonzero_prob).unsqueeze(-1)
+        pi_pos = nonzero_prob.unsqueeze(-1) * pos_pi
+        return torch.cat([pi0, pi_pos], dim=-1)
 
     def _build_candidates_last(self, up_seq: torch.Tensor):
         B, L, D = up_seq.shape
@@ -82,7 +120,7 @@ class DelayAlignment(nn.Module):
             alpha = alpha + self.lag_bias[None, :]
         # 第 6 点修改：显式屏蔽超出历史窗口的无效 lag，而不是简单截断。
         alpha = alpha.masked_fill(~valid_mask[None, :], float("-inf"))
-        pi = F.softmax(alpha / self.tau, dim=-1)                      # [B, K]
+        pi = self._lag_distribution_from_scores(alpha, down_last)     # [B, K]
 
         v = self.Wv(up_raw)                                           # [B, K, D]
         # msg 是送给下游融合模块的投影后消息；
@@ -104,7 +142,7 @@ class DelayAlignment(nn.Module):
         if self.lag_bias is not None:
             alpha = alpha + self.lag_bias[None, None, :]
         alpha = alpha.masked_fill(~valid_mask[None, :, :], float("-inf"))
-        pi = F.softmax(alpha / self.tau, dim=-1)                      # [B, L, K]
+        pi = self._lag_distribution_from_scores(alpha, down_seq)      # [B, L, K]
 
         v = self.Wv(up_raw)                                           # [B, L, K, D]
         # 对每个时间步，按 pi 在候选 lag 维度上做加权和。

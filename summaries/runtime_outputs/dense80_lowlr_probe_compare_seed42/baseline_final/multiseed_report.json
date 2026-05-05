@@ -1,0 +1,11 @@
+{
+  "configs": [
+    "/gpfs/projects/p32954/dimf_liquid_sugar_repo-490/outputs/dense80_lowlr_probe_seed42/_generated_configs/baseline_final.yaml"
+  ],
+  "bump_csv": "/gpfs/projects/p32954/dimf_liquid_sugar_repo-490/data/processed/LiquidSugar_local_bump_mixed_balanced_evalsafe_segmentsplit_v3_dense80_rawgap.csv",
+  "output_root": "/gpfs/projects/p32954/dimf_liquid_sugar_repo-490/outputs/dense80_lowlr_probe_compare_seed42/baseline_final",
+  "n_seeds": 1,
+  "seeds": [
+    "baseline_final"
+  ]
+}

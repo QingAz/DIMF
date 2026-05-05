@@ -9,5 +9,6 @@ outputs/
 logs/
 .pyuser/
 .venv-quest/
+.venv-transfer-eval/
 
 .DS_Store

@@ -208,6 +208,8 @@ def _regularize_split_with_gap_policy(
     gap_fill_min: int,
     fillna: str,
     use_delta_t: bool,
+    sample_keep_col: Optional[str] = None,
+    respect_existing_segment_id: bool = False,
     ) -> pd.DataFrame:
     """
     按照“两阈值策略”处理单个时间切分：
@@ -220,15 +222,23 @@ def _regularize_split_with_gap_policy(
     if gap_fill_min > gap_break_min:
         raise ValueError("gap_fill_min must be <= gap_break_min")
 
-    # 先按时间排序，后续所有 segment 划分和规则网格都基于这个有序时间轴。
-    df_part = df_part.sort_values(time_col).reset_index(drop=True).copy()
+    # 先按时间排序；如果显式要求保留已有 segment_id，则在 segment 内部再按时间排序。
+    if respect_existing_segment_id and "segment_id" in df_part.columns:
+        df_part = df_part.sort_values(["segment_id", time_col]).reset_index(drop=True).copy()
+    else:
+        df_part = df_part.sort_values(time_col).reset_index(drop=True).copy()
     interval = pd.Timedelta(minutes=collection_interval_min)
     meta_cols = {"segment_id", "is_real_observation", "is_small_gap_fill", "delta_t_min"}
+    if sample_keep_col:
+        meta_cols.add(sample_keep_col)
     value_cols = [c for c in df_part.columns if c != time_col and c not in meta_cols]
     mask_cols = [_mask_col_name(c) for c in value_cols]
 
-    delta_minutes = df_part[time_col].diff().dt.total_seconds().div(60.0)
-    raw_segment_id = delta_minutes.gt(float(gap_break_min)).fillna(False).cumsum().astype(np.int64)
+    if respect_existing_segment_id and "segment_id" in df_part.columns:
+        raw_segment_id = df_part["segment_id"].fillna(-1).astype(np.int64)
+    else:
+        delta_minutes = df_part[time_col].diff().dt.total_seconds().div(60.0)
+        raw_segment_id = delta_minutes.gt(float(gap_break_min)).fillna(False).cumsum().astype(np.int64)
     df_part["_raw_segment_id"] = raw_segment_id
 
     regularized_parts = []
@@ -279,6 +289,8 @@ def _regularize_split_with_gap_policy(
             segment_grid["delta_t_min"] = (
                 segment_grid["delta_t_min"].bfill().fillna(0.0).astype(np.float32)
             )
+        if sample_keep_col:
+            segment_grid[sample_keep_col] = segment_grid[sample_keep_col].fillna(0).astype(np.int8)
         for col in value_cols:
             segment_grid[_mask_col_name(col)] = segment_grid[_mask_col_name(col)].fillna(0).astype(np.int8)
 
@@ -302,7 +314,10 @@ def _regularize_split_with_gap_policy(
 
     out = pd.concat(regularized_parts, ignore_index=True)
     aux_cols = ["delta_t_min"] if use_delta_t else []
-    ordered_cols = [time_col] + value_cols + aux_cols + mask_cols + ["segment_id", "is_real_observation", "is_small_gap_fill"]
+    ordered_cols = [time_col] + value_cols + aux_cols + mask_cols
+    if sample_keep_col:
+        ordered_cols.append(sample_keep_col)
+    ordered_cols += ["segment_id", "is_real_observation", "is_small_gap_fill"]
     out = out[ordered_cols].sort_values(time_col).reset_index(drop=True)
     return out
 
@@ -313,6 +328,7 @@ def _sample_indices_from_regularized_split(
     history_steps: Optional[int],
     horizon_steps: Optional[int],
     collection_interval_min: int,
+    sample_keep_col: Optional[str] = None,
 ) -> Optional[np.ndarray]:
     if history_steps is None or horizon_steps is None:
         return None
@@ -351,6 +367,9 @@ def _sample_indices_from_regularized_split(
                 continue
             if int(segment_df["is_real_observation"].iloc[label_local]) != 1:
                 continue
+            if sample_keep_col and sample_keep_col in segment_df.columns:
+                if int(segment_df[sample_keep_col].iloc[local_t]) != 1:
+                    continue
 
             sample_indices.append(int(segment_df["_global_index"].iloc[local_t]))
 
@@ -380,6 +399,8 @@ def load_and_prepare(
     use_missing_mask: bool = True,
     include_target_history: bool = False,
     split_col: str = "split",
+    sample_keep_col: Optional[str] = None,
+    respect_existing_segment_id: bool = False,
 ) -> Tuple[PreparedData, Dict[str, List[str]]]:
     """
     从原始 CSV 走完整个 DIMF 输入准备流程：
@@ -416,6 +437,8 @@ def load_and_prepare(
             gap_fill_min=gap_fill_min,
             fillna=fillna,
             use_delta_t=use_delta_t,
+            sample_keep_col=sample_keep_col,
+            respect_existing_segment_id=respect_existing_segment_id,
         )
         for part in raw_parts
     ]
@@ -438,6 +461,7 @@ def load_and_prepare(
         history_steps=history_steps,
         horizon_steps=horizon_steps,
         collection_interval_min=collection_interval_min,
+        sample_keep_col=sample_keep_col,
     )
     sample_indices_val = _sample_indices_from_regularized_split(
         df_val,
@@ -445,6 +469,7 @@ def load_and_prepare(
         history_steps=history_steps,
         horizon_steps=horizon_steps,
         collection_interval_min=collection_interval_min,
+        sample_keep_col=sample_keep_col,
     )
     sample_indices_test = _sample_indices_from_regularized_split(
         df_test,
@@ -452,6 +477,7 @@ def load_and_prepare(
         history_steps=history_steps,
         horizon_steps=horizon_steps,
         collection_interval_min=collection_interval_min,
+        sample_keep_col=sample_keep_col,
     )
 
     # fit scalers on TRAIN only (avoid leakage)
@@ -485,6 +511,14 @@ def load_and_prepare(
         if "lag_gt" in df_part.columns:
             extra_targets["stage1_to_stage2_lag_gt"] = (
                 df_part["lag_gt"].fillna(-1).astype(np.int64).to_numpy()
+            )
+        if "inject_flag" in df_part.columns:
+            extra_targets["stage1_to_stage2_in_block_gt"] = (
+                df_part["inject_flag"].fillna(0).astype(np.int64).to_numpy()
+            )
+        if "segment_dmax_gt" in df_part.columns:
+            extra_targets["stage1_to_stage2_dmax_gt"] = (
+                df_part["segment_dmax_gt"].fillna(0).astype(np.int64).to_numpy()
             )
         return extra_targets or None
 

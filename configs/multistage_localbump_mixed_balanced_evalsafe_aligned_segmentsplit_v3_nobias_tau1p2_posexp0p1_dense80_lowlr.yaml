@@ -1,0 +1,71 @@
+seed: 42
+seeds: [42, 134, 321, 456, 712]
+strict_requirements: true
+data:
+  csv_path: data/processed/LiquidSugar_local_bump_mixed_balanced_evalsafe_segmentsplit_v3_dense80_rawgap.csv
+  time_col: TimeStamp
+  target_col: yield_flow
+  feed_prefix: feed_
+  stage1_prefix: stage1_
+  stage2_prefix: stage2_
+  stage3_prefix: stage3_
+  split_mode: predefined_valid_segments
+  split_col: split
+  collection_interval_min: 15
+  train_ratio: 0.7
+  val_ratio: 0.1
+  test_ratio: 0.2
+  L: 96
+  H: 4
+  L_max: 23
+  gap_break_min: 120
+  gap_fill_min: 60
+  fillna: ffill
+  use_delta_t: true
+  use_missing_mask: true
+  include_target_history: false
+model:
+  encoder: transformer
+  hidden_dim: 64
+  num_layers: 2
+  dropout: 0.1
+  attn_dim: 64
+  lag_emb: true
+  use_alignment: true
+  align_feed_to_stage1: false
+  align_stage1_to_stage2: true
+  align_stage2_to_stage3: false
+  align_tau: 1.2
+  align_dropout: 0.0
+  use_lag_bias: false
+  transformer_nhead: 4
+  transformer_ff_dim: 256
+train:
+  epochs: 150
+  batch_size: 64
+  lr: 0.00025
+  weight_decay: 0.0001
+  grad_clip: 1.0
+  pred_warmup_epochs: 10
+  ramp_epochs: 20
+  lambda_align: 0.1
+  lambda_ent: 0.002
+  lambda_tv: 0.005
+  lambda_lag_supervision: 0.1
+  lambda_lag_binary_aux: 0.0
+  lambda_lag_pos_expected_aux: 0.1
+  lambda_lag_occurrence: 1.0
+  lambda_lag_positive: 1.0
+  lag_binary_aux_gamma: 0.0
+  lag_supervision_edge: stage1_to_stage2
+  lag_supervision_key: stage1_to_stage2_lag_gt
+  lag_supervision_weighting: sqrt_inverse_frequency
+  lag_occurrence_weighting: balanced
+  align_loss_temp: 0.2
+  checkpoint_metric: val_pred
+  checkpoint_after_warmup_only: true
+logging:
+  output_dir: outputs/localbump_mixed_balanced_evalsafe_aligned_segmentsplit_v3_nobias_tau1p2_posexp0p1_dense80_lowlr
+  log_path: outputs/localbump_mixed_balanced_evalsafe_aligned_segmentsplit_v3_nobias_tau1p2_posexp0p1_dense80_lowlr/train_log.jsonl
+  ckpt_path: artifacts/localbump_mixed_balanced_evalsafe_aligned_segmentsplit_v3_nobias_tau1p2_posexp0p1_dense80_lowlr/best.ckpt
+  scaler_path: artifacts/localbump_mixed_balanced_evalsafe_aligned_segmentsplit_v3_nobias_tau1p2_posexp0p1_dense80_lowlr/scaler.pkl
