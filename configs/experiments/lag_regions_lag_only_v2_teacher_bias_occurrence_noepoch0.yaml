@@ -1,0 +1,26 @@
+base_config: lag_regions_lag_only_v2_teacher_bias_occurrence.yaml
+
+training:
+  epochs_lag_identifier: 8
+  lr_lag_identifier: 1.0e-5
+  lag_identifier_teacher_distill:
+    enabled: true
+    kl_weight: 5.0
+    occurrence_weight: 1.5
+    scope: all
+
+checkpoint_selection:
+  include_epoch0: false
+  mode: lag_balanced_composite
+  min_group_samples: 8
+  weights:
+    expected_lag_mae_injected: 1.0
+    expected_lag_mae_no_lag: 0.5
+    no_lag_false_alarm_rate: 0.5
+    worst_shape_expected_lag_mae: 0.8
+    worst_lag_class_mae: 0.5
+    worst_segment_mae: 0.8
+    worst_region_mae: 0.0
+
+logging:
+  output_dir: results/lag_only_v2_teacher_bias_occurrence_noepoch0

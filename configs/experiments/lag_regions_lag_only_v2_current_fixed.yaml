@@ -1,0 +1,14 @@
+base_config: lag_regions_lag_only_v2_teacher_heads_noepoch0_gate003.yaml
+
+training:
+  epochs_lag_identifier: 0
+
+lag_identifier:
+  init_checkpoint: results/lag_only_v2_teacher_heads_noepoch0_gate003_42_43_44/best_lag_identifier.pt
+
+checkpoint_selection:
+  include_epoch0: true
+  mode: lag_balanced_composite
+
+logging:
+  output_dir: results/lag_only_v2_current_fixed

@@ -1,0 +1,9 @@
+base_config: lag_regions_train_test_regionseg_nodecay.yaml
+
+loss:
+  use_gaussian_lag_label: false
+  lambda_positive_ce: 2.0
+  positive_ce_class_weights: [0.64, 2.72, 0.68, 2.19, 0.88]
+
+logging:
+  output_dir: results/lag_tune_lag5_all_s1_positive_ce1_occ035_sincurv02_regionseg_nodecay_hardce_balanced

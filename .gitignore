@@ -1,0 +1,17 @@
+.idea/
+.codex_backups/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+artifacts/
+results/
+summaries/
+outputs/
+logs/
+.pyuser/
+.venv-quest/
+.venv-transfer-eval/
+
+.DS_Store

@@ -1,0 +1,85 @@
+base_config: ../default.yaml
+
+data:
+  csv_path: data/O_data/LiquidSugar.csv
+  L: 12
+  H: 1
+  L_max: 5
+  split_mode: rows
+  train_ratio: 0.7
+  val_ratio: 0.1
+  test_ratio: 0.2
+  gap_break_min: 15
+  gap_fill_min: 0
+  fillna: ffill
+  use_delta_t: false
+  use_missing_mask: false
+  include_target_history: false
+
+lag_edges:
+  - name: stage1_to_stage2
+    source_stage: stage1
+    target_stage: stage2
+    source_features: all
+    target_features: all
+
+lag_identifier:
+  init_checkpoint: results/lag_only_v2_teacher_heads_noepoch0_gate003_42_43_44/best_lag_identifier.pt
+  enabled: true
+  model: stda_lag_identifier
+  hidden_dim: 64
+  use_candidate_window_encoder: true
+  lag_window_radius: 2
+  lag_window_hidden_dim: 64
+  lag_temperature: 0.7
+  lag_window_mode: causal
+  keep_old_point_identifier: true
+  num_layers: 2
+  max_lag: 5
+  temperature: 0.7
+  use_temporal_decay: false
+  use_feature_attention: true
+  use_sequence_smoother: true
+  sequence_smoother_hidden_dim: 32
+  sequence_smoother_layers: 1
+  sequence_smoother_dropout: 0.1
+  sequence_smoother_residual_scale: 1.0
+
+model:
+  encoder: gru
+  hidden_dim: 64
+  num_layers: 2
+  dropout: 0.1
+  attn_dim: 64
+  lag_emb: true
+  align_tau: 0.7
+  align_dropout: 0.1
+  lag_head_mode: softmax
+  use_alignment: true
+  use_lag_bias: true
+  head_stage: stage3
+  use_feed_context: true
+
+delay_prior:
+  enabled: true
+  prior_mode: soft_distribution
+  lambda_prior: 0.3
+  sigma_prior: 1.5
+  weak_prior_mix: 0.0
+
+training:
+  raw_adaptation: true
+  batch_size: 256
+  epochs_lag_identifier: 0
+  epochs_dimf: 50
+  epochs_joint: 0
+  lr_dimf: 1.0e-3
+
+raw_adaptation:
+  enabled: true
+  prior_source: pretrained
+  note: "No synthetic lag labels are used; long or irregular timestamp gaps are not filled."
+
+logging:
+  output_dir: results/raw_liquidsugar_y_only_adapt
+  ytarget_only_output: true

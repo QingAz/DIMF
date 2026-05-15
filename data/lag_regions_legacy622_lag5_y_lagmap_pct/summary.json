@@ -1,0 +1,120 @@
+{
+  "source_dataset": "DIMF\\data\\lag_regions_legacy622_lag5",
+  "output_dataset": "DIMF\\data\\lag_regions_legacy622_lag5_y_lagmap_pct",
+  "rule": "yield_flow := yield_flow_original * (1 + lag_gt * pct_per_lag)",
+  "pct_per_lag": 0.01,
+  "lag_to_y_response_percent": {
+    "0": 0.0,
+    "1": 1.0,
+    "2": 2.0,
+    "3": 3.0,
+    "4": 4.0,
+    "5": 5.0
+  },
+  "splits": {
+    "train": {
+      "rows": 28031,
+      "target_col": "yield_flow",
+      "lag_col": "lag_gt",
+      "mean_y_original": 78.28286749918168,
+      "mean_y_mapped": 79.48920296358928,
+      "mean_delta": 1.2063354644075888,
+      "by_lag": {
+        "0": {
+          "n_rows": 12932,
+          "response_percent": 0.0,
+          "mean_y_original": 77.83630459665765,
+          "mean_y_mapped": 77.83630459665765,
+          "mean_delta": 0.0
+        },
+        "1": {
+          "n_rows": 4746,
+          "response_percent": 1.0,
+          "mean_y_original": 78.97441347281692,
+          "mean_y_mapped": 79.76415760754509,
+          "mean_delta": 0.78974413472817
+        },
+        "2": {
+          "n_rows": 1102,
+          "response_percent": 2.0,
+          "mean_y_original": 77.68763338984118,
+          "mean_y_mapped": 79.24138605763801,
+          "mean_delta": 1.5537526677968252
+        },
+        "3": {
+          "n_rows": 4466,
+          "response_percent": 3.0,
+          "mean_y_original": 77.59765168275143,
+          "mean_y_mapped": 79.925581233234,
+          "mean_delta": 2.3279295504825455
+        },
+        "4": {
+          "n_rows": 1382,
+          "response_percent": 4.0,
+          "mean_y_original": 78.27286010268325,
+          "mean_y_mapped": 81.40377450679058,
+          "mean_delta": 3.1309144041073336
+        },
+        "5": {
+          "n_rows": 3403,
+          "response_percent": 5.0,
+          "mean_y_original": 80.11149703523792,
+          "mean_y_mapped": 84.11707188699981,
+          "mean_delta": 4.005574851761899
+        }
+      }
+    },
+    "test": {
+      "rows": 7008,
+      "target_col": "yield_flow",
+      "lag_col": "lag_gt",
+      "mean_y_original": 75.73745783264472,
+      "mean_y_mapped": 76.79461197039475,
+      "mean_delta": 1.0571541377500484,
+      "by_lag": {
+        "0": {
+          "n_rows": 3319,
+          "response_percent": 0.0,
+          "mean_y_original": 75.73860872851127,
+          "mean_y_mapped": 75.73860872851127,
+          "mean_delta": 0.0
+        },
+        "1": {
+          "n_rows": 1255,
+          "response_percent": 1.0,
+          "mean_y_original": 72.97187960212588,
+          "mean_y_mapped": 73.70159839814714,
+          "mean_delta": 0.7297187960212593
+        },
+        "2": {
+          "n_rows": 330,
+          "response_percent": 2.0,
+          "mean_y_original": 77.8551990949495,
+          "mean_y_mapped": 79.41230307684849,
+          "mean_delta": 1.5571039818989914
+        },
+        "3": {
+          "n_rows": 1173,
+          "response_percent": 3.0,
+          "mean_y_original": 77.49308517554189,
+          "mean_y_mapped": 79.81787773080815,
+          "mean_delta": 2.3247925552662587
+        },
+        "4": {
+          "n_rows": 414,
+          "response_percent": 4.0,
+          "mean_y_original": 74.66287522342996,
+          "mean_y_mapped": 77.64939023236715,
+          "mean_delta": 2.986515008937201
+        },
+        "5": {
+          "n_rows": 517,
+          "response_percent": 5.0,
+          "mean_y_original": 77.96889413120569,
+          "mean_y_mapped": 81.86733883776596,
+          "mean_delta": 3.8984447065602867
+        }
+      }
+    }
+  }
+}

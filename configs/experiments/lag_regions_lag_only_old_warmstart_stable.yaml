@@ -1,0 +1,30 @@
+base_config: lag_regions_lag_only_best.yaml
+
+data:
+  val_region_ids: [8, 9]
+  fit_scaler_on_full_train_before_val: true
+
+lag_identifier:
+  init_checkpoint: results/lag_only_best_nosmooth_adaptive_viterbi/best_lag_identifier.pt
+
+training:
+  epochs_lag_identifier: 20
+  lr_lag_identifier: 1.0e-4
+  lag_identifier_shuffle: true
+
+loss:
+  lambda_expected_lag: 0.4
+  lambda_occurrence: 1.0
+  occurrence_pos_weight: 1.5
+  lambda_positive_ce: 2.0
+  use_gaussian_lag_label: false
+  enable_segment_aware_temporal_loss: false
+
+lag_postprocess:
+  segment_zero_gate:
+    enabled: true
+    occurrence_median_threshold: 0.02
+    min_segment_samples: 50
+
+logging:
+  output_dir: results/lag_only_old_warmstart_stable

@@ -1,0 +1,9 @@
+base_config: lag_regions_train_test_regionseg_nodecay_hardce_balanced_occ08_postzero.yaml
+
+training:
+  epochs_lag_identifier: 0
+  epochs_dimf: 50
+
+logging:
+  output_dir: results/ytarget_stage2_only
+  ytarget_only_output: true

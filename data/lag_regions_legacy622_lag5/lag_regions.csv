@@ -1,0 +1,16 @@
+split,region_id,start_row,end_row_exclusive,n_rows,shape,pattern,lag_min,lag_max,positive_rows
+train,0,560,2242,1682,sinusoidal,sin_0_5,0,5,1338
+train,1,3363,5045,1682,fixed,const_1,1,1,1682
+train,2,6166,7848,1682,sinusoidal,sin_0_5,0,5,1338
+train,3,8969,10651,1682,fixed,const_3,3,3,1682
+train,4,11772,13454,1682,sinusoidal,sin_0_5,0,5,1338
+train,5,14575,16257,1682,fixed,const_5,5,5,1682
+train,6,17378,19060,1682,sinusoidal,sin_0_5,0,5,1338
+train,7,20181,21863,1682,fixed,const_1,1,1,1682
+train,8,22984,24666,1682,sinusoidal,sin_0_5,0,5,1337
+train,9,25788,27470,1682,fixed,const_3,3,3,1682
+test,0,280,1121,841,sinusoidal,sin_0_5,0,5,669
+test,1,1681,2522,841,fixed,const_1,1,1,841
+test,2,3083,3924,841,sinusoidal,sin_0_5,0,5,669
+test,3,4484,5325,841,fixed,const_3,3,3,841
+test,4,5886,6727,841,sinusoidal,sin_0_5,0,5,669

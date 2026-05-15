@@ -1,0 +1,17 @@
+base_config: lag_regions_lag_only_v2_current_fixed.yaml
+
+training:
+  epochs_lag_identifier: 0
+  epochs_dimf: 50
+  epochs_joint: 0
+
+delay_prior:
+  enabled: true
+  prior_mode: soft_distribution
+  lambda_prior: 1.0
+  sigma_prior: 1.5
+  weak_prior_mix: 0.0
+
+logging:
+  output_dir: results/dimf_with_current_lag_prior
+  ytarget_only_output: false

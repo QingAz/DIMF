@@ -1,0 +1,108 @@
+seed: 42
+
+data:
+  train_csv: data/lag_regions_legacy622_lag5/train.csv
+  test_csv: data/lag_regions_legacy622_lag5/test.csv
+  time_col: TimeStamp
+  target_col: yield_flow
+  feed_prefix: feed_
+  stage1_prefix: stage1_
+  stage2_prefix: stage2_
+  stage3_prefix: stage3_
+  L: 12
+  H: 1
+  L_max: 5
+  collection_interval_min: 15
+
+lag_edges:
+  - name: stage1_to_stage2
+    source_stage: stage1
+    target_stage: stage2
+    source_features: all
+    target_features: all
+
+lag_identifier:
+  enabled: true
+  model: stda_lag_identifier
+  hidden_dim: 64
+  use_candidate_window_encoder: true
+  lag_window_radius: 2
+  lag_window_hidden_dim: 64
+  lag_temperature: 0.7
+  lag_window_mode: causal
+  keep_old_point_identifier: true
+  num_layers: 2
+  max_lag: 5
+  temperature: 0.7
+  use_temporal_decay: true
+  use_feature_attention: true
+  use_sequence_smoother: true
+  sequence_smoother_hidden_dim: 32
+  sequence_smoother_layers: 1
+  sequence_smoother_dropout: 0.1
+  sequence_smoother_residual_scale: 1.0
+
+loss:
+  lambda_soft_lag: 2.0
+  lambda_expected_lag: 0.3
+  lambda_occurrence: 0.35
+  lambda_entropy: 0.01
+  lambda_smooth: 0.01
+  lambda_positive_smooth: 0.1
+  lambda_positive_slope: 0.0
+  enable_segment_aware_temporal_loss: false
+  lambda_positive_ce: 1.0
+  use_gaussian_lag_label: true
+  gaussian_lag_sigma: 0.7
+  positive_ce_class_weights: null
+  lambda_shape_curvature: 0.2
+  shape_curvature_ids: [5]
+
+training:
+  batch_size: 256
+  epochs_lag_identifier: 100
+  epochs_dimf: 50
+  epochs_joint: 0
+  lr_lag_identifier: 1.0e-3
+  lr_dimf: 1.0e-3
+  lr_joint: 5.0e-4
+
+model:
+  encoder: gru
+  hidden_dim: 64
+  num_layers: 2
+  dropout: 0.1
+  attn_dim: 64
+  lag_emb: true
+  align_tau: 0.7
+  align_dropout: 0.1
+  lag_head_mode: softmax
+  use_alignment: true
+  use_lag_bias: true
+  head_stage: stage3
+  use_feed_context: true
+
+delay_prior:
+  enabled: true
+  prior_mode: soft_distribution
+  lambda_prior: 1.0
+  sigma_prior: 1.5
+  weak_prior_mix: 0.0
+
+feature_screening:
+  enabled: true
+  top_ratio: 1.0
+  top_k: null
+
+viterbi:
+  enabled: false
+  use_viterbi_decode: false
+  viterbi_smooth_lambda: 0.3
+  viterbi_switch_penalty: 0.5
+  viterbi_pos_to_zero_penalty: 0.8
+
+ablation:
+  variant: F_dimf_lag_guided_alignment_feature_screening
+
+logging:
+  output_dir: results/lag_tune_lag5_all_s1_positive_ce1_occ035_sincurv02

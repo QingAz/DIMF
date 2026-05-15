@@ -1,0 +1,16 @@
+base_config: lag_regions_lag_only_v2_stable_warmstart.yaml
+
+lag_identifier:
+  fine_tune_mode: heads_only
+
+training:
+  epochs_lag_identifier: 30
+  lr_lag_identifier: 2.0e-5
+  lag_identifier_teacher_distill:
+    enabled: true
+    kl_weight: 2.0
+    occurrence_weight: 0.5
+    scope: all
+
+logging:
+  output_dir: results/lag_only_v2_teacher_heads

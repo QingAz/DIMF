@@ -1,0 +1,42 @@
+{
+  "train_path": "data\\lag_regions_legacy622_lag5\\train.csv",
+  "test_path": "data\\lag_regions_legacy622_lag5\\test.csv",
+  "source_cols": [
+    "stage1_var1",
+    "stage1_var2"
+  ],
+  "target_cols": [
+    "stage2_var1",
+    "stage2_var10",
+    "stage2_var11",
+    "stage2_var12",
+    "stage2_var2",
+    "stage2_var3",
+    "stage2_var4",
+    "stage2_var5",
+    "stage2_var6",
+    "stage2_var7",
+    "stage2_var8",
+    "stage2_var9"
+  ],
+  "train_rows": 28031,
+  "test_rows": 7008,
+  "train_positive_ratio": 0.5386536334772216,
+  "test_positive_ratio": 0.526398401826484,
+  "train_lag_counts": {
+    "0": 12932,
+    "1": 4746,
+    "2": 1102,
+    "3": 4466,
+    "4": 1382,
+    "5": 3403
+  },
+  "test_lag_counts": {
+    "0": 3319,
+    "1": 1255,
+    "2": 330,
+    "3": 1173,
+    "4": 414,
+    "5": 517
+  }
+}

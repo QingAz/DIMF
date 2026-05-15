@@ -1,0 +1,7 @@
+base_config: lag_regions_lag_only_old_warmstart_stable.yaml
+
+training:
+  epochs_lag_identifier: 0
+
+logging:
+  output_dir: results/lag_only_old_checkpoint_stable

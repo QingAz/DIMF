@@ -1,0 +1,112 @@
+seed: 42
+seeds: [42, 134, 456, 321, 712]
+
+data:
+  csv_path: data/O_data/LiquidSugar.csv
+  time_col: TimeStamp
+  target_col: yield_flow
+
+  # feature groups (prefix matching)
+  feed_prefix: feed_
+  stage1_prefix: stage1_
+  stage2_prefix: stage2_
+  stage3_prefix: stage3_
+
+  # chronological split ratios
+  train_ratio: 0.7
+  val_ratio: 0.1
+  test_ratio: 0.2
+
+  # windowing
+  L: 96            # history length (steps)
+  H: 4             # 固定提前量（步），预测单个 y_{t+H}
+  L_max: 48        # max lag candidates (<= L-1)
+  collection_interval_min: 15
+  gap_break_min: 120   # gap > 120 min 时切分为新的 segment
+  gap_fill_min: 60     # 仅对不超过 60 min 的小缺口补齐
+  sample_keep_col: null
+  respect_existing_segment_id: false
+
+  # missing handling
+  fillna: ffill    # ffill / bfill / zero
+  use_delta_t: true
+  use_missing_mask: true   # 每个工段输入追加对应特征的 0/1 缺失掩码
+
+model:
+  encoder: transformer   # gru / lstm / transformer；当前默认使用因果 Transformer
+  hidden_dim: 64
+  num_layers: 3
+  dropout: 0.0
+
+  # delay alignment
+  attn_dim: 64
+  lag_emb: true
+  align_tau: 0.7   # softmax 温度 τ；越小分布越尖锐
+  align_dropout: 0.0   # 训练期对对齐消息随机置零的概率 p_align
+  lag_head_mode: softmax  # softmax / factorized
+
+  # transformer only
+  transformer_nhead: 4
+  transformer_ff_dim: 256
+
+train:
+  epochs: 200
+  batch_size: 256
+  lr: 0.0005
+  weight_decay: 0.0001
+  grad_clip: 1.0
+
+  # regularization weights
+  lambda_pred: 1.0
+  pred_warmup_epochs: 10   # 前若干个 epoch 仅优化 L_pred
+  ramp_epochs: 20          # 随后在线性升权阶段把正则权重从 0 拉到目标值
+  lambda_align: 0.1
+  lambda_ent: 0.005
+  lambda_tv: 0.01
+  lambda_lag_supervision: 0.0
+  lambda_lag_binary_aux: 0.0
+  lambda_lag_pos_expected_aux: 0.0
+  lambda_lag_expected_aux: 0.0
+  lambda_lag_soft_target_aux: 0.0
+  lambda_lag_zero: 0.0
+  lambda_lag_occurrence: 1.0
+  lambda_lag_positive: 1.0
+  lag_binary_aux_gamma: 0.0
+  lag_binary_aux_pos_weight: null
+  lag_zero_mode: nll_zero
+  lag_positive_expected_aux_mode: final
+  lag_expected_aux_weighting: none
+  lag_expected_aux_scope: valid
+  lag_expected_aux_decay_start_epoch: 0
+  lag_expected_aux_decay_end_epoch: 200
+  lag_expected_aux_decay_final_scale: 1.0
+  lag_soft_target_weighting: none
+  lag_soft_target_sigma: 1.0
+  lag_soft_target_scope: valid
+  lag_soft_target_mode: final
+  lag_supervision_edge: null
+  lag_supervision_key: null
+  lag_binary_aux_target_key: null
+  lag_pos_expected_aux_target_key: null
+  lag_expected_aux_target_key: null
+  lag_soft_target_target_key: null
+  lag_zero_target_key: null
+  lag_supervision_weighting: none
+  lag_occurrence_weighting: balanced
+  align_loss_temp: 0.2   # 对齐一致性损失的 InfoNCE 温度
+  checkpoint_min_epoch: 0
+  eval_checkpoint: best
+  checkpoint_save_every: 0
+  alignment_checkpoint_select: false
+  checkpoint_selection_edge: null
+  checkpoint_selection_key: null
+  checkpoint_select_zero_max: 0.5
+  checkpoint_select_far_max: 0.6
+  checkpoint_select_metric: null
+  checkpoint_select_direction: auto
+
+logging:
+  output_dir: outputs
+  log_path: outputs/train_log.jsonl
+  ckpt_path: artifacts/best.ckpt
+  scaler_path: artifacts/scaler.pkl

@@ -1,0 +1,10 @@
+base_config: lag_regions_lag_only_v2_teacher_heads_noepoch0.yaml
+
+lag_postprocess:
+  segment_zero_gate:
+    enabled: true
+    occurrence_median_threshold: 0.03
+    min_segment_samples: 50
+
+logging:
+  output_dir: results/lag_only_v2_teacher_heads_noepoch0_gate003

@@ -1,0 +1,59 @@
+base_config: lag_regions_lag_only_best.yaml
+
+data:
+  val_fraction_per_segment: 0.15
+  val_split_mode: uniform_blocks
+  val_block_size: 96
+  val_min_samples_per_segment: 48
+  val_min_train_samples_per_segment: 96
+  fit_scaler_on_full_train_before_val: true
+
+lag_identifier:
+  init_checkpoint: results/lag_only_v2_teacher_heads_noepoch0_gate003_42_43_44/best_lag_identifier.pt
+
+training:
+  epochs_lag_identifier: 20
+  lr_lag_identifier: 5.0e-5
+  lag_identifier_shuffle: false
+  lag_identifier_sampler:
+    enabled: true
+    strategy: shape_lag_balanced
+    positive_fraction: 0.55
+    balance_lag_classes: true
+    balance_shapes: true
+    replacement: true
+    shape_weights:
+      sinusoidal: 1.4
+      ramp: 1.2
+      local_bump: 1.2
+
+loss:
+  lambda_soft_lag: 1.0
+  lambda_expected_lag: 0.2
+  lambda_occurrence: 0.8
+  occurrence_pos_weight: 1.2
+  lambda_positive_ce: 1.0
+  positive_ce_class_weights: [0.64, 2.72, 0.68, 2.19, 0.88]
+  use_gaussian_lag_label: false
+  enable_segment_aware_temporal_loss: false
+
+checkpoint_selection:
+  mode: lag_balanced_composite
+  min_group_samples: 8
+  weights:
+    expected_lag_mae_injected: 1.0
+    expected_lag_mae_no_lag: 0.5
+    no_lag_false_alarm_rate: 0.5
+    worst_shape_expected_lag_mae: 0.8
+    worst_lag_class_mae: 0.5
+    worst_segment_mae: 0.8
+    worst_region_mae: 0.0
+
+lag_postprocess:
+  segment_zero_gate:
+    enabled: true
+    occurrence_median_threshold: 0.02
+    min_segment_samples: 50
+
+logging:
+  output_dir: results/lag_only_v2_stable_warmstart

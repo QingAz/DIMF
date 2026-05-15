@@ -1,0 +1,8 @@
+base_config: lag_regions_train_test_regionseg_nodecay_hardce_balanced_occ08_postzero_nosmooth_adaptive_viterbi.yaml
+
+training:
+  epochs_lag_identifier: 0
+  epochs_dimf: 50
+
+logging:
+  output_dir: results/lag_tune_lag5_all_s1_positive_ce1_occ035_sincurv02_regionseg_nodecay_hardce_balanced_occ08_postzero_nosmooth_adaptive_viterbi_full_y_stage2_only

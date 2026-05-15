@@ -1,0 +1,24 @@
+base_config: lag_regions_train_test_regionseg_nodecay_hardce_balanced_occ08_postzero.yaml
+
+lag_eval_postprocess:
+  eval_sequence_smoother: false
+  adaptive_viterbi:
+    enabled: true
+    strong:
+      smooth_lambda: 1.5
+      switch_penalty: 1.5
+      pos_to_zero_penalty: 3.0
+    weak:
+      smooth_lambda: 0.5
+      switch_penalty: 2.0
+      pos_to_zero_penalty: 3.0
+    trigger:
+      occurrence_median_gt: 0.5
+      smooth_expected_mean_lt: 1.2
+      smooth_expected_range_gt: 3.0
+  stabilizer:
+    type: segment_mode_filter
+    window: 61
+
+logging:
+  output_dir: results/lag_only_best_nosmooth_adaptive_viterbi
